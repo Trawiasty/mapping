@@ -1,0 +1,2349 @@
+<!DOCTYPE html>
+<html lang="pl" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projekcja3D - Mapping Projekcyjny Elewacji</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            900: '#312e81',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        #main-viewport-parent { position: fixed !important; inset: 0; padding: 0 !important; width: 100vw; height: 100vh; z-index: 0; }
+        #viewport-container { position: absolute !important; width: 1280px !important; height: 720px !important; transform-origin: top left !important; transition: none !important; border: 0 !important; border-radius: 0 !important; }
+        .floating-panel { position: fixed !important; z-index: 60 !important; display: flex !important; flex-direction: column !important; width: 320px; max-width: calc(100vw - 16px); max-height: calc(100vh - 70px); border: 1px solid #475569 !important; border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px #0008; }
+        #tools-panel { width: min(1100px, calc(100vw - 16px)); padding: 0 !important; }
+        .panel-grip { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: #1e293b; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: move; touch-action: none; flex: 0 0 auto; user-select: none; }
+        .panel-grip button { cursor: pointer; padding: 2px 10px; border: 1px solid #64748b; border-radius: 4px; }
+        .panel-content { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+        #layers-panel .panel-content, #properties-panel .panel-content { height: min(620px, calc(100vh - 150px)); }
+        #tools-panel .panel-content { padding: 10px; gap: 10px; }
+        #tools-panel .panel-content > div:last-child { flex-wrap: wrap; gap: 6px; }
+        .floating-panel.collapsed .panel-content { display: none !important; }
+        body.panels-hidden .floating-panel { display: none !important; }
+        body.mode-fullscreen .floating-panel { display: none !important; }
+        #panel-controls { position: fixed; left: 8px; bottom: 8px; z-index: 80; display: flex; gap: 8px; background: #0f172a; padding: 6px; border: 1px solid #475569; border-radius: 8px; }
+        #panel-controls button { color: #f1f5f9; background: #334155; padding: 6px 10px; border-radius: 5px; font-size: 12px; }
+
+        #delete-layer-dialog { width: min(420px, calc(100vw - 32px)); margin: auto; padding: 24px; border: 1px solid #475569; border-radius: 14px; color: #f1f5f9; background: #0f172a; box-shadow: 0 24px 80px #0009; }
+        #delete-layer-dialog::backdrop { background: #0009; }
+        #delete-layer-dialog h2 { font-size: 20px; font-weight: 700; margin-bottom: 14px; }
+        #delete-layer-dialog p { margin-bottom: 12px; }
+        #delete-layer-dialog .delete-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
+        #delete-layer-dialog button { padding: 10px 16px; border-radius: 8px; background: #334155; cursor: pointer; }
+        #delete-layer-dialog #delete-layer-confirm { background: #dc2626; color: white; }
+        #delete-layer-dialog button:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 3px; }
+
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+        
+        .workspace-grid {
+            background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        /* Surface Quad Container */
+        .surface-wrapper {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform-origin: 0 0;
+            will-change: transform;
+            pointer-events: none;
+        }
+
+        .surface-content {
+            width: 100%;
+            height: 100%;
+            object-fit: fill;
+        }
+
+        /* Stable touch dragging for both corner and mesh points. */
+        .corner-handle, .mesh-handle {
+            pointer-events: auto;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .corner-handle::after, .mesh-handle::after {
+            content: '';
+            position: absolute;
+            width: 44px;
+            height: 44px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        /* Interactive Corner Handles */
+        .corner-handle {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            margin-left: -8px;
+            margin-top: -8px;
+            border-radius: 50%;
+            background: #6366f1;
+            border: 2px solid #ffffff;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.8);
+            cursor: move;
+            z-index: 50;
+            transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+
+        .corner-handle:hover, .corner-handle.active {
+            transform: scale(1.4);
+            background: #22c55e;
+            border-color: #ffffff;
+            box-shadow: 0 0 15px rgba(34, 197, 94, 0.9);
+        }
+
+        .mesh-handle {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            margin-left: -6px;
+            margin-top: -6px;
+            border-radius: 50%;
+            background: #f59e0b;
+            border: 2px solid #ffffff;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+            cursor: move;
+            z-index: 55;
+            transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+
+        .mesh-handle:hover, .mesh-handle.active {
+            transform: scale(1.4);
+            background: #ef4444;
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.9);
+        }
+
+        .handle-label {
+            position: absolute;
+            top: -22px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.9);
+            color: #22c55e;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 1px 4px;
+            border-radius: 3px;
+            pointer-events: none;
+            white-space: nowrap;
+            border: 1px solid rgba(34, 197, 94, 0.4);
+        }
+
+        /* Subdivision Mesh Grid SVG */
+        .mesh-svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 35;
+        }
+
+        /* Polygon Mask Styles */
+        .mask-svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 30;
+        }
+
+        /* Fullscreen Projection Mode */
+        body.mode-fullscreen .ui-chrome {
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+        body.mode-fullscreen #main-viewport-parent {
+            background-color: #000 !important;
+            background-image: none !important;
+        }
+        body.mode-fullscreen #viewport-container {
+            border-color: transparent !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+        }
+        body.mode-fullscreen .surface-drag-area,
+        body.mode-fullscreen .mesh-handle,
+        body.mode-fullscreen .corner-handle,
+        body.mode-fullscreen .surface-outline,
+        body.mode-fullscreen #facade-bg-img {
+            display: none !important;
+        }
+        body.mode-fullscreen #facade-bg-layer,
+        body.mode-fullscreen #toast-container,
+        body.mode-fullscreen #handles-layer,
+        body.mode-fullscreen #calibration-grid-svg { display: none !important; }
+        body.mode-fullscreen .projection-mask { stroke: none !important; }
+        body.mode-fullscreen {
+            background-color: #000000 !important;
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden select-none font-sans">
+
+    <dialog id="delete-layer-dialog" aria-labelledby="delete-layer-title" aria-describedby="delete-layer-description">
+        <h2 id="delete-layer-title">Usunąć warstwę?</h2>
+        <p>Warstwa: <strong id="delete-layer-name"></strong></p>
+        <p id="delete-layer-description">Warstwa i jej ustawienia zostaną usunięte. Usunięcie możesz cofnąć przyciskiem Cofnij lub skrótem Ctrl+Z.</p>
+        <div class="delete-actions">
+            <button type="button" id="delete-layer-cancel">Anuluj</button>
+            <button type="button" id="delete-layer-confirm">Usuń warstwę</button>
+        </div>
+    </dialog>
+
+
+    <!-- Informacje o autorze i warunkach korzystania -->
+    <dialog id="license-dialog" aria-labelledby="license-title" style="margin:auto;width:min(690px,calc(100vw - 28px));max-height:85vh;overflow:auto;border:1px solid #475569;border-radius:14px;background:#0f172a;color:#f1f5f9;padding:24px;box-shadow:0 24px 80px #000a;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px">
+        <h2 id="license-title" style="font-size:21px;font-weight:700">O aplikacji i licencja</h2>
+        <button type="button" id="license-close" aria-label="Zamknij informacje o licencji" style="padding:7px 12px;background:#334155;border-radius:7px">✕</button>
+      </div>
+      <div style="font-size:14px;line-height:1.65">
+        <p><strong>Projekcja3D v2.6.2</strong> — Mapping Projekcyjny Elewacji &amp; VJ Suite</p>
+        <p><strong>Autor i pomysłodawca:</strong> Michał Tycjan Grześlak.</p>
+        <p>Aplikacja została pierwotnie wygenerowana z wykorzystaniem Google Gemini, a następnie rozwijana i doskonalona przy użyciu ChatGPT (OpenAI), zgodnie z koncepcją i wskazówkami autora.</p>
+        <h3 style="font-weight:700;font-size:16px;margin-top:16px">Warunki korzystania z aplikacji</h3>
+        <p>Autor zezwala na nieodpłatne używanie, kopiowanie, modyfikowanie i dalsze rozpowszechnianie aplikacji w celach niekomercyjnych, pod warunkiem zachowania informacji o autorze, wskazania tych warunków i oznaczenia wprowadzonych zmian.</p>
+        <p><strong>Każde wykorzystanie komercyjne wymaga uprzedniej, indywidualnej zgody autora.</strong></p>
+        <p>Warunki dotyczą wyłącznie elementów, do których autorowi przysługują odpowiednie prawa. Biblioteki, ikony, czcionki i inne komponenty zewnętrzne zachowują własne licencje. Jest to licencja własna na kod aplikacji, a nie licencja Creative Commons.</p>
+        <h3 style="font-weight:700;font-size:16px;margin-top:16px">Materiały i dokumentacja</h3>
+        <p>Materiały i dokumentacja opracowane przez autora są udostępniane na licencji <strong>Creative Commons Uznanie autorstwa – Użycie niekomercyjne 4.0 Międzynarodowa (CC BY-NC 4.0)</strong>, w zakresie przysługujących autorowi praw.</p>
+        <p><a href="https://creativecommons.org/licenses/by-nc/4.0/deed.pl" target="_blank" rel="noopener noreferrer" style="color:#a5b4fc;text-decoration:underline">Przeczytaj warunki CC BY-NC 4.0</a></p>
+        <p style="color:#94a3b8;margin-top:18px">© 2026 Michał Tycjan Grześlak. Prawa zastrzeżone w zakresie przysługujących autorowi praw.</p>
+      </div>
+    </dialog>
+
+
+
+    <!-- TOP NAVIGATION BAR -->
+    <header id="tools-panel" class="floating-panel ui-chrome bg-slate-900 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shrink-0 z-40">
+        <div class="flex items-center space-x-3">
+            <div class="bg-brand-600 text-white p-2 rounded-lg shadow-lg shadow-brand-500/30 flex items-center justify-center">
+                <i class="fa-solid fa-cube text-lg"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-slate-100 text-base leading-tight tracking-wide flex items-center gap-2">
+                    Projekcja3D <span class="bg-brand-500/20 text-brand-400 text-xs px-2 py-0.5 rounded border border-brand-500/30 font-mono">v2.6.2</span>
+                </h1>
+                <p class="text-xs text-slate-400">Mapowanie Projekcyjne Elewacji & VJ Suite</p>
+            </div>
+        </div>
+
+        <!-- Quick Action Controls -->
+        <div class="flex items-center space-x-2">
+            <button id="btn-add-surface" class="bg-brand-600 hover:bg-brand-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition shadow-sm">
+                <i class="fa-solid fa-plus"></i>
+                <span>Dodaj Powierzchnię</span>
+            </button>
+
+            <label class="text-xs">Kolumny <input id="mesh-cols" type="number" min="2" max="10" step="1" value="3" class="w-14 bg-slate-800 border border-slate-600 rounded px-1 py-1" style="appearance:auto"></label>
+            <label class="text-xs">Wiersze <input id="mesh-rows" type="number" min="2" max="10" step="1" value="3" class="w-14 bg-slate-800 border border-slate-600 rounded px-1 py-1" style="appearance:auto"></label>
+            <button id="btn-subdivide-mesh" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition shadow-sm" title="Przekształć w siatkę wielopunktową (Mesh 3x3)">
+                <i class="fa-solid fa-chess-board"></i>
+                <span>Zastosuj siatkę</span>
+            </button>
+
+            <button id="btn-undo" type="button" class="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs" title="Cofnij ostatnią zmianę (Ctrl+Z)">↶ Cofnij</button>
+            <button id="btn-add-mask" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition">
+                <i class="fa-solid fa-draw-polygon text-amber-400"></i>
+                <span>Dodaj Maskę Wycięcia</span>
+            </button>
+
+            <div class="h-5 w-px bg-slate-800 mx-1"></div>
+
+            <button id="btn-toggle-grid" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition">
+                <i class="fa-solid fa-border-all text-emerald-400"></i>
+                <span id="grid-btn-text">Siatka Kalibracyjna</span>
+            </button>
+
+            <button id="btn-play-pause-all" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition">
+                <i class="fa-solid fa-pause text-cyan-400" id="play-all-icon"></i>
+                <span id="play-all-text">Pauza Wszystko</span>
+            </button>
+
+            <div class="h-5 w-px bg-slate-800 mx-1"></div>
+
+            <button id="btn-save-project" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-medium transition" title="Zapisz projekt ZIP z plikami">
+                <i class="fa-solid fa-download"></i>
+            </button>
+            <label id="btn-load-project" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition" title="Wczytaj projekt ZIP lub JSON">
+                <i class="fa-solid fa-upload"></i> <span>Import ZIP / JSON</span>
+                <input type="file" id="input-load-file" class="hidden">
+            </label>
+
+            <div class="h-5 w-px bg-slate-800 mx-1"></div>
+
+            <button type="button" id="btn-license-info" aria-label="O aplikacji i licencja" title="O aplikacji i licencja" class="bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 rounded-lg px-3 py-1.5 text-sm font-bold">?</button>
+            <button id="btn-fullscreen" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition shadow-md shadow-emerald-900/30">
+                <i class="fa-solid fa-expand"></i>
+                <span>Tryb Projekcji (F)</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN WORKSPACE LAYOUT -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- LEFT SIDEBAR: Layers & Facade Controls -->
+        <aside id="layers-panel" class="floating-panel ui-chrome w-80 bg-slate-900/90 backdrop-blur-md border-r border-slate-800 flex flex-col shrink-0 z-30">
+            <!-- Sidebar Header Tabs -->
+            <div class="flex border-b border-slate-800 bg-slate-950/50">
+                <button id="tab-surfaces-btn" class="flex-1 py-2.5 text-xs font-medium border-b-2 border-brand-500 text-brand-400 flex items-center justify-center space-x-2">
+                    <i class="fa-solid fa-layer-group"></i>
+                    <span>Warstwy i Powierzchnie</span>
+                </button>
+                <button id="tab-facade-btn" class="flex-1 py-2.5 text-xs font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center justify-center space-x-2">
+                    <i class="fa-solid fa-building"></i>
+                    <span>Tło Elewacji</span>
+                </button>
+            </div>
+
+            <!-- TAB CONTENT 1: SURFACES LIST -->
+            <div id="tab-surfaces" class="flex-1 overflow-y-auto p-3 space-y-3">
+                <div class="flex items-center justify-between text-xs text-slate-400 font-medium px-1">
+                    <span>Lista Powierzchni Mapowania</span>
+                    <span id="surface-count" class="bg-slate-800 px-2 py-0.5 rounded text-slate-300 font-mono">0</span>
+                </div>
+
+                <p class="text-[11px] text-slate-400 px-1">Kolejność od góry: warstwa na wierzchu. Przeciągnij za uchwyt lub użyj strzałek.</p>
+                <div id="surfaces-list" class="space-y-2">
+                    <!-- Dynamic surface items will be inserted here -->
+                </div>
+
+                <!-- Masks Section -->
+                <div class="pt-4 border-t border-slate-800">
+                    <div class="flex items-center justify-between text-xs text-slate-400 font-medium px-1 mb-2">
+                        <span>Maski Wycięcia (Otoczenie/Okna)</span>
+                        <span id="mask-count" class="bg-slate-800 px-2 py-0.5 rounded text-slate-300 font-mono">0</span>
+                    </div>
+                    <div id="masks-list" class="space-y-2">
+                        <!-- Dynamic mask items -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB CONTENT 2: FACADE PRESETS & BACKGROUND -->
+            <div id="tab-facade" class="flex-1 overflow-y-auto p-3 space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-2">Wybierz Wzorzec Elewacji Do Testów</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button class="facade-preset-btn bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700 text-left transition text-xs" data-preset="palace">
+                            <div class="font-medium text-slate-200"><i class="fa-solid fa-landmark text-amber-400 mr-1"></i> Pałac Klasyczny</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Kolumny, okna, gzyms</div>
+                        </button>
+                        <button class="facade-preset-btn bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700 text-left transition text-xs" data-preset="modern">
+                            <div class="font-medium text-slate-200"><i class="fa-solid fa-city text-cyan-400 mr-1"></i> Wieżowiec Szkło</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Nowoczesna siatka okien</div>
+                        </button>
+                        <button class="facade-preset-btn bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700 text-left transition text-xs" data-preset="brick">
+                            <div class="font-medium text-slate-200"><i class="fa-solid fa-cubes text-orange-400 mr-1"></i> Ściana z Cegły</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Tekstura industrialna</div>
+                        </button>
+                        <button class="facade-preset-btn bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700 text-left transition text-xs" data-preset="none">
+                            <div class="font-medium text-slate-200"><i class="fa-solid fa-moon text-indigo-400 mr-1"></i> Ciemne Tło</div>
+                            <div class="text-[10px] text-slate-400 mt-0.5">Brak podglądu elewacji</div>
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1.5">Własne Zdjęcie Budynku / Elewacji</label>
+                    <input type="file" id="input-facade-upload" accept="image/*" class="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-brand-600 file:text-white hover:file:bg-brand-500 cursor-pointer bg-slate-800/50 rounded-lg border border-slate-700">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Przezroczystość Tła Elewacji</label>
+                    <input type="range" id="facade-opacity" min="0" max="1" step="0.05" value="0.7" class="w-full accent-brand-500">
+                </div>
+            </div>
+
+            <!-- Key Shortcuts Footer Guide -->
+            <div class="p-3 bg-slate-950/80 border-t border-slate-800 text-[11px] text-slate-400 space-y-1 font-mono">
+                <div class="text-slate-300 font-sans font-semibold text-xs mb-1"><i class="fa-solid fa-keyboard mr-1 text-brand-400"></i> Skróty klawiszowe:</div>
+                <div><span class="text-slate-200 bg-slate-800 px-1 rounded">Strzałki</span> : Precyzyjne przesuwanie punktu</div>
+                <div><span class="text-slate-200 bg-slate-800 px-1 rounded">Shift + Strzałki</span> : Szybki ruch (+10px)</div>
+                <div><span class="text-slate-200 bg-slate-800 px-1 rounded">Shift + narożnik</span> : Skaluj warstwę proporcjonalnie</div>
+                <div><span class="text-slate-200 bg-slate-800 px-1 rounded">Delete</span> : Usuń zaznaczenie</div>
+                <div><span class="text-slate-200 bg-slate-800 px-1 rounded">F</span> : Przełącz edycję / projekcję</div>
+            </div>
+        </aside>
+
+        <!-- CENTER VIEWPORT (PROJECTION CANVAS AREA) -->
+        <main class="flex-1 bg-slate-950 flex items-center justify-center relative p-4 overflow-hidden workspace-grid" id="main-viewport-parent">
+            
+            <!-- Projection Stage Container (Fixed aspect ratio 16:9 1920x1080 scaled) -->
+            <div id="viewport-container" style="flex-shrink:0;transition-property:box-shadow" class="relative w-[1280px] h-[720px] bg-black shadow-2xl rounded-lg border border-slate-800 overflow-hidden transition-all duration-300 origin-center">
+                
+                <!-- Facade Background Layer -->
+                <div id="facade-bg-layer" class="absolute inset-0 z-0 bg-cover bg-center pointer-events-none opacity-70 transition-opacity">
+                    <!-- SVG or Image background injected here -->
+                </div>
+
+                <!-- Calibration Grid Overlay Layer -->
+                <svg id="calibration-grid-svg" class="absolute inset-0 w-full h-full z-10 pointer-events-none hidden" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <pattern id="grid-pattern" width="80" height="80" patternUnits="userSpaceOnUse">
+                            <path d="M 80 0 L 0 0 0 80" fill="none" stroke="rgba(34, 197, 94, 0.25)" stroke-width="1" />
+                            <circle cx="40" cy="40" r="1.5" fill="rgba(34, 197, 94, 0.4)"/>
+                        </pattern>
+                        <pattern id="grid-pattern-sub" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(34, 197, 94, 0.08)" stroke-width="0.5" />
+                        </pattern>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#grid-pattern-sub)" />
+                    <rect width="100%" height="100%" fill="url(#grid-pattern)" />
+                    <!-- Diagonal alignment lines -->
+                    <line x1="0" y1="0" x2="100%" y2="100%" stroke="rgba(34, 197, 94, 0.3)" stroke-width="1" stroke-dasharray="6,6"/>
+                    <line x1="100%" y1="0" x2="0" y2="100%" stroke="rgba(34, 197, 94, 0.3)" stroke-width="1" stroke-dasharray="6,6"/>
+                    <!-- Center Crosshair -->
+                    <circle cx="50%" cy="50%" r="50" fill="none" stroke="rgba(34, 197, 94, 0.5)" stroke-width="1.5"/>
+                    <line x1="50%" y1="0" x2="50%" y2="100%" stroke="rgba(34, 197, 94, 0.4)" stroke-width="1"/>
+                    <line x1="0" y1="50%" x2="100%" y2="50%" stroke="rgba(34, 197, 94, 0.4)" stroke-width="1"/>
+                </svg>
+
+                <!-- Mapping Surfaces Render Stack -->
+                <div id="surfaces-stack" class="absolute inset-0 z-20">
+                    <!-- Dynamic Surface Wrappers will be appended here -->
+                </div>
+
+                <!-- SVG Layer for Masks and Outlines -->
+                <svg id="vector-overlay-svg" class="mask-svg z-30" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Surface Outlines & Polygon Mask Cutouts -->
+                </svg>
+
+                <!-- Interactive Handles Overlay Layer -->
+                <div id="handles-layer" class="absolute inset-0 z-40 pointer-events-none">
+                    <!-- Dynamic corner & mesh drag handles -->
+                </div>
+            </div>
+
+            <!-- Viewport Overlay Controls (Zoom & Fit) -->
+            <div class="ui-chrome absolute bottom-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-800 rounded-lg p-1.5 flex items-center space-x-2 text-xs z-40 shadow-xl">
+                <button id="btn-zoom-out" class="p-1.5 text-slate-300 hover:bg-slate-800 rounded"><i class="fa-solid fa-minus"></i></button>
+                <span id="zoom-value" class="font-mono text-slate-300 w-12 text-center">100%</span>
+                <button id="btn-zoom-in" class="p-1.5 text-slate-300 hover:bg-slate-800 rounded"><i class="fa-solid fa-plus"></i></button>
+                <button id="btn-zoom-reset" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px]">Dopasuj</button>
+            </div>
+        </main>
+
+        <!-- RIGHT SIDEBAR: Surface Properties Inspector -->
+        <aside id="properties-panel" class="floating-panel ui-chrome w-80 bg-slate-900/90 backdrop-blur-md border-l border-slate-800 flex flex-col shrink-0 z-30">
+            <div class="p-3 border-b border-slate-800 bg-slate-950/50 flex items-center justify-between">
+                <h2 class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                    <i class="fa-solid fa-[#6366f1] fa-sliders text-brand-400"></i>
+                    <span>Inspektor Właściwości</span>
+                </h2>
+                <span id="active-surface-name" class="text-xs text-brand-400 font-mono font-semibold">Brak wyboru</span>
+            </div>
+
+            <div id="inspector-content" class="flex-1 overflow-y-auto p-4 space-y-5 text-xs">
+                <!-- Message when nothing selected -->
+                <div id="inspector-empty" class="text-center py-12 text-slate-500">
+                    <i class="fa-solid fa-arrow-pointer text-3xl mb-3 opacity-40"></i>
+                    <p>Kliknij powierzchnię na liście lub w oknie podglądu, aby edytować jej parametry.</p>
+                </div>
+
+                <!-- Inspector Form (Hidden until selected) -->
+                <div id="inspector-form" class="space-y-5 hidden">
+                    
+                    <!-- Surface Label & Type -->
+                    <div>
+                        <label class="block font-semibold text-slate-300 mb-1">Nazwa Warstwy</label>
+                        <input type="text" id="prop-label" class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100 focus:outline-none focus:border-brand-500">
+                    </div>
+
+                    <!-- Video Source Selector -->
+                    <div>
+                        <label class="block font-semibold text-slate-300 mb-1.5">Źródło Wideo / Animacji</label>
+                        <select id="prop-video-source-type" class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100 mb-2 focus:outline-none focus:border-brand-500">
+                            <optgroup label="Wbudowane Generator Visuali (Proceduralne)">
+                                <option value="gen-grid">Neon Cyber Grid 3D</option>
+                                <option value="gen-matrix">Digital Matrix Rain</option>
+                                <option value="gen-particles">Particle Cloud Swarm</option>
+                                <option value="gen-spectrum">Audio Equalizer Waves</option>
+                                <option value="gen-tunnel">Hypnotic Geometry Tunnel</option>
+                            </optgroup>
+                            <optgroup label="Zewnętrzne Źródło">
+                                <option value="custom-file">Wgraj film lub grafikę</option>
+                                <option value="custom-url">Adres URL filmu lub grafiki</option>
+                            </optgroup>
+                        </select>
+
+                        <!-- File Input Wrapper -->
+                        <div id="source-file-wrapper" class="hidden">
+                            <input type="file" id="prop-video-file" accept="video/mp4,video/webm,video/ogg,image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/bmp,image/avif,.png,.jpg,.jpeg,.webp,.gif,.svg,.bmp,.avif,.mp4,.webm,.ogv,.ogg" class="w-full text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-brand-600 file:text-white file:text-xs">
+                        </div>
+
+                        <p class="text-xs text-slate-400 mt-2">Grafiki: PNG, JPG/JPEG, WebP, GIF, SVG, BMP, AVIF. Filmy: MP4, WebM, Ogg.</p>
+
+                        <label id="image-proportions-wrapper" class="flex items-center gap-2 mt-2 text-xs text-slate-200">
+                            <input type="checkbox" id="prop-preserve-image-aspect">
+                            <span>Zachowaj proporcje grafiki</span>
+                        </label>
+                        <p class="text-xs text-slate-400 mt-1">Zaznaczone: wymiary warstwy dopasują się do proporcji obrazu, bez marginesów. Odznaczone: obraz wypełnia obecną warstwę.</p>
+
+                        <!-- URL Input Wrapper -->
+                        <div id="source-url-wrapper" class="hidden flex gap-1">
+                            <input type="text" id="prop-video-url" placeholder="https://example.com/video.mp4" class="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-100">
+                            <button id="btn-apply-url" class="bg-brand-600 px-2 py-1 rounded text-white font-medium">Zastosuj</button>
+                        </div>
+                    </div>
+
+                    <!-- Visual Filters & Blend Modes -->
+                    <div class="space-y-3 pt-3 border-t border-slate-800">
+                        <h3 class="font-bold text-slate-300 text-xs">Efekty Wizualne & Filtry</h3>
+
+                        <div>
+                            <div class="flex justify-between text-slate-400 mb-1">
+                                <span>Tryb Mieszania (Blend)</span>
+                            </div>
+                            <select id="prop-blend-mode" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-100">
+                                <option value="normal">Normalny</option>
+                                <option value="screen">Ekran (Screen - Jasne)</option>
+                                <option value="additive">Liniowe Dociemnienie (Additive)</option>
+                                <option value="lighten">Rozjaśnianie</option>
+                                <option value="multiply">Mnożenie (Multiply)</option>
+                                <option value="difference">Różnica</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between text-slate-400 mb-1">
+                                <span>Przezroczystość (Opacity)</span>
+                                <span id="val-opacity" class="font-mono text-brand-400">100%</span>
+                            </div>
+                            <input type="range" id="prop-opacity" min="0" max="1" step="0.01" value="1" class="w-full accent-brand-500">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between text-slate-400 mb-1">
+                                <span>Jasność (Brightness)</span>
+                                <span id="val-brightness" class="font-mono text-brand-400">100%</span>
+                            </div>
+                            <input type="range" id="prop-brightness" min="0" max="2" step="0.05" value="1" class="w-full accent-brand-500">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between text-slate-400 mb-1">
+                                <span>Kontrast (Contrast)</span>
+                                <span id="val-contrast" class="font-mono text-brand-400">100%</span>
+                            </div>
+                            <input type="range" id="prop-contrast" min="0" max="2" step="0.05" value="1" class="w-full accent-brand-500">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between text-slate-400 mb-1">
+                                <span>Odcień (Hue Rotate)</span>
+                                <span id="val-hue" class="font-mono text-brand-400">0°</span>
+                            </div>
+                            <input type="range" id="prop-hue" min="0" max="360" step="5" value="0" class="w-full accent-brand-500">
+                        </div>
+                    </div>
+
+                    <!-- Corner Coordinates Numeric Fine-Tuning -->
+                    <div class="space-y-2 pt-3 border-t border-slate-800">
+                        <div class="flex justify-between items-center">
+                            <h3 class="font-bold text-slate-300 text-xs">Punkty Kontrolne & Siatka</h3>
+                            <div class="space-x-2">
+                                <button id="btn-toggle-subdiv" class="text-[10px] text-amber-400 hover:underline">Siatka / 4 narożniki</button>
+                                <button id="btn-reset-corners" class="text-[10px] text-brand-400 hover:underline">Reset</button>
+                            </div>
+                        </div>
+
+                        <div id="corners-coords-container" class="grid grid-cols-2 gap-2 text-[11px] font-mono max-h-48 overflow-y-auto pr-1">
+                            <!-- Dynamic point coordinate inputs -->
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="pt-3 border-t border-slate-800 flex gap-2">
+                        <button id="btn-duplicate-surface" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 py-2 rounded text-xs font-semibold transition">
+                            <i class="fa-regular fa-copy mr-1"></i> Duplikuj
+                        </button>
+                        <button id="btn-delete-surface" class="flex-1 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 py-2 rounded text-xs font-semibold transition">
+                            <i class="fa-solid fa-trash mr-1"></i> Usuń Warstwę
+                        </button>
+                    </div>
+
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <div id="panel-controls" class="ui-chrome">
+        <button type="button" id="toggle-panels">Ukryj panele (Tab)</button>
+        <button type="button" id="reset-panels">Przywróć układ</button>
+    </div>
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="fixed top-14 right-4 z-50 space-y-2 pointer-events-none"></div>
+
+    <script>
+        /**
+         * APPLICATION STATE & MATH ENGINE
+         */
+        const SCENE_WIDTH = 1280;
+        const SCENE_HEIGHT = 720;
+
+        let state = {
+            surfaces: [],
+            masks: [],
+            activeSurfaceId: null,
+            activeCornerIndex: null,
+            activeMeshIndex: null,
+            activeMaskId: null,
+            facadeBg: 'palace', // 'palace', 'modern', 'brick', 'none', or custom image URL
+            facadeOpacity: 0.7,
+            showGrid: false,
+            zoom: 1,
+            isPlayingAll: true,
+            isDragging: false,
+            dragType: null, // 'corner', 'mesh', 'surface', 'mask'
+            dragStartPos: { x: 0, y: 0 }
+        };
+
+        const undoHistory = [];
+        let historyReady = false;
+        function projectSnapshot() {
+            return JSON.stringify({surfaces:state.surfaces,masks:state.masks,facadeBg:state.facadeBg,facadeOpacity:state.facadeOpacity});
+        }
+        function rememberChange() {
+            if (!historyReady) return;
+            const snapshot=projectSnapshot();
+            if(undoHistory.at(-1)!==snapshot) undoHistory.push(snapshot);
+            if(undoHistory.length>100) undoHistory.shift();
+        }
+        function undoLastChange() {
+            if(state.isDragging) return;
+            const current=projectSnapshot();
+            while(undoHistory.length && undoHistory.at(-1)===current) undoHistory.pop();
+            if(!undoHistory.length) {showToast('Brak zmian do cofnięcia','info');return;}
+            const saved=JSON.parse(undoHistory.pop());
+            Object.assign(state,saved);
+            if(!state.surfaces.some(s=>s.id===state.activeSurfaceId)) state.activeSurfaceId=state.surfaces.at(-1)?.id||null;
+            if(!state.masks.some(m=>m.id===state.activeMaskId)) state.activeMaskId=null;
+            state.activeCornerIndex=null; state.activeMeshIndex=null;
+            renderFacadeBackground();renderAllSurfacesDOM();updateSurfacesListUI();updateInspectorUI();
+            showToast('Cofnięto ostatnią zmianę','success');
+        }
+        function addMaskPoint(id) {
+            const mask=state.masks.find(m=>m.id===id);if(!mask || mask.points.length>=64) return;
+            rememberChange();
+            let longest=-1,index=0;
+            mask.points.forEach((p,i)=>{const next=mask.points[(i+1)%mask.points.length];const d=(next.x-p.x)**2+(next.y-p.y)**2;if(d>longest){longest=d;index=i;}});
+            const a=mask.points[index],b=mask.points[(index+1)%mask.points.length];
+            mask.points.splice(index+1,0,{x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+            state.activeMaskId=id;state.activeSurfaceId=null;
+            renderAllSurfacesDOM();updateSurfacesListUI();updateInspectorUI();
+        }
+
+        // Use the actual point layer, excluding the viewport border and layout shrink.
+        function pointerToScene(e) {
+            const layer=document.getElementById('handles-layer');
+            const rect=layer.getBoundingClientRect();
+            return {
+                x:(e.clientX-rect.left)*layer.offsetWidth/rect.width,
+                y:(e.clientY-rect.top)*layer.offsetHeight/rect.height
+            };
+        }
+
+        function fitProjectionStage() {
+            const width=window.innerWidth,height=window.innerHeight;
+            const scale=Math.min(width/SCENE_WIDTH,height/SCENE_HEIGHT);
+            const stage=document.getElementById('viewport-container');
+            stage.style.left=`${(width-SCENE_WIDTH*scale)/2}px`;
+            stage.style.top=`${(height-SCENE_HEIGHT*scale)/2}px`;
+            stage.style.transform=`scale(${scale})`;
+        }
+        function setupFloatingPanels() {
+            const key='projekcja3d-floating-panels-v1';
+            const ids=['tools-panel','layers-panel','properties-panel'];
+            const titles=['Narzędzia — przeciągnij','Warstwy i maski — przeciągnij','Właściwości — przeciągnij'];
+            let saved={};try{saved=JSON.parse(localStorage.getItem(key)||'{}');}catch{}
+            function defaults(id) {
+                if(id==='tools-panel') return {x:8,y:8};
+                return {x:id==='layers-panel'?8:Math.max(8,innerWidth-328),y:155};
+            }
+            function clamp(panel,x,y) {
+                panel.style.left=`${Math.max(0,Math.min(innerWidth-panel.offsetWidth,x))}px`;
+                panel.style.top=`${Math.max(0,Math.min(innerHeight-40,y))}px`;
+            }
+            function save() {
+                const data={};ids.forEach(id=>{const panel=document.getElementById(id);data[id]={x:parseFloat(panel.style.left),y:parseFloat(panel.style.top),collapsed:panel.classList.contains('collapsed')};});
+                try{localStorage.setItem(key,JSON.stringify(data));}catch{}
+            }
+            ids.forEach((id,index)=>{
+                const panel=document.getElementById(id);
+                const content=document.createElement('div');content.className='panel-content';
+                while(panel.firstChild) content.appendChild(panel.firstChild);
+                const grip=document.createElement('div');grip.className='panel-grip';
+                const title=document.createElement('span');title.textContent=titles[index];grip.appendChild(title);
+                const collapse=document.createElement('button');collapse.type='button';collapse.textContent='−';collapse.setAttribute('aria-label','Zwiń panel');grip.appendChild(collapse);
+                panel.append(grip,content);
+                const value=saved[id]||defaults(id);panel.classList.toggle('collapsed',!!value.collapsed);collapse.textContent=value.collapsed?'+':'−';
+                clamp(panel,value.x,value.y);
+                collapse.addEventListener('click',()=>{const collapsed=panel.classList.toggle('collapsed');collapse.textContent=collapsed?'+':'−';collapse.setAttribute('aria-label',collapsed?'Rozwiń panel':'Zwiń panel');save();});
+                let drag=null;
+                grip.addEventListener('pointerdown',e=>{
+                    if(e.target.closest('button') || (e.pointerType==='mouse'&&e.button!==0)) return;
+                    e.preventDefault();e.stopPropagation();
+                    drag={id:e.pointerId,x:e.clientX,y:e.clientY,left:parseFloat(panel.style.left),top:parseFloat(panel.style.top)};
+                    grip.setPointerCapture(e.pointerId);
+                });
+                grip.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;e.preventDefault();clamp(panel,drag.left+e.clientX-drag.x,drag.top+e.clientY-drag.y);});
+                function finish(e){if(!drag||drag.id!==e.pointerId)return;drag=null;save();}
+                grip.addEventListener('pointerup',finish);grip.addEventListener('pointercancel',finish);grip.addEventListener('lostpointercapture',finish);
+            });
+            function togglePanels(){const hidden=document.body.classList.toggle('panels-hidden');document.getElementById('toggle-panels').textContent=hidden?'Pokaż panele (Tab)':'Ukryj panele (Tab)';}
+            document.getElementById('toggle-panels').addEventListener('click',togglePanels);
+            document.getElementById('reset-panels').addEventListener('click',()=>{
+                document.body.classList.remove('panels-hidden');document.getElementById('toggle-panels').textContent='Ukryj panele (Tab)';
+                ids.forEach(id=>{const panel=document.getElementById(id),p=defaults(id);panel.classList.remove('collapsed');panel.querySelector('.panel-grip button').textContent='−';clamp(panel,p.x,p.y);});save();
+            });
+            window.addEventListener('keydown',e=>{if(e.key==='Tab'&&!e.target.closest('input,textarea,select,button,[contenteditable]')&&!document.getElementById('delete-layer-dialog').open){e.preventDefault();togglePanels();}});
+            window.addEventListener('resize',()=>{fitProjectionStage();ids.forEach(id=>{const p=document.getElementById(id);clamp(p,parseFloat(p.style.left),parseFloat(p.style.top));});});
+            fitProjectionStage();
+        }
+
+        // Keep transient pointer data outside the saved project state.
+        let dragPointerId = null;
+        let dragOffset = { x: 0, y: 0 };
+        let proportionalDrag = null;
+        function makeProportionalDrag(surf,index) {
+            const ids=surf.isMesh ? [0,meshSize(surf).cols-1,surf.corners.length-1,(meshSize(surf).rows-1)*meshSize(surf).cols] : [0,1,2,3];
+            const corner=ids.indexOf(index);
+            if(corner<0) return null;
+            return {index,anchor:{...surf.corners[ids[(corner+2)%4]]},points:surf.corners.map(p=>({...p}))};
+        }
+        function scalePointsFromCorner(drag,x,y) {
+            const anchor=drag.anchor,p=drag.points[drag.index];
+            const vx=p.x-anchor.x,vy=p.y-anchor.y,lengthSquared=vx*vx+vy*vy;
+            if(lengthSquared<0.0001) return drag.points.map(p=>({...p}));
+            const scale=Math.max(0.01,((x-anchor.x)*vx+(y-anchor.y)*vy)/lengthSquared);
+            return drag.points.map(p=>({x:anchor.x+(p.x-anchor.x)*scale,y:anchor.y+(p.y-anchor.y)*scale}));
+        }
+        let surfaceDragStart = null;
+        let surfaceDragCorners = null;
+
+        // Procedural Animation Generators (HTML5 Canvas Textures)
+        const canvasGenerators = {};
+
+        /**
+         * 8-PARAMETER HOMOGRAPHY SOLVER (Quad-to-Quad CSS Matrix3D Transform)
+         * Solves system of linear equations A * h = B using Gaussian Elimination
+         */
+        function solve8x8(A, B) {
+            const n = 8;
+            for (let i = 0; i < n; i++) {
+                let maxEl = Math.abs(A[i][i]);
+                let maxRow = i;
+                for (let k = i + 1; k < n; k++) {
+                    if (Math.abs(A[k][i]) > maxEl) {
+                        maxEl = Math.abs(A[k][i]);
+                        maxRow = k;
+                    }
+                }
+                for (let k = i; k < n; k++) {
+                    const tmp = A[maxRow][k];
+                    A[maxRow][k] = A[i][k];
+                    A[i][k] = tmp;
+                }
+                const tmpB = B[maxRow];
+                B[maxRow] = B[i];
+                B[i] = tmpB;
+
+                for (let k = i + 1; k < n; k++) {
+                    const c = -A[k][i] / A[i][i];
+                    for (let j = i; j < n; j++) {
+                        if (i === j) {
+                            A[k][j] = 0;
+                        } else {
+                            A[k][j] += c * A[i][j];
+                        }
+                    }
+                    B[k] += c * B[i];
+                }
+            }
+
+            const x = new Array(n).fill(0);
+            for (let i = n - 1; i >= 0; i--) {
+                let sum = 0;
+                for (let j = i + 1; j < n; j++) {
+                    sum += A[i][j] * x[j];
+                }
+                x[i] = (B[i] - sum) / A[i][i];
+            }
+            return x;
+        }
+
+        function getHomographyMatrix(src, dst) {
+            const A = [];
+            const B = [];
+            for (let i = 0; i < 4; i++) {
+                const sx = src[i].x, sy = src[i].y;
+                const dx = dst[i].x, dy = dst[i].y;
+                A.push([sx, sy, 1, 0, 0, 0, -sx * dx, -sy * dx]);
+                B.push(dx);
+                A.push([0, 0, 0, sx, sy, 1, -sx * dy, -sy * dy]);
+                B.push(dy);
+            }
+            const h = solve8x8(A, B);
+            return h; // [a, b, c, d, e, f, g, h]
+        }
+
+        function computeCSSMatrix3D(width, height, corners) {
+            const src = [
+                { x: 0, y: 0 },
+                { x: width, y: 0 },
+                { x: width, y: height },
+                { x: 0, y: height }
+            ];
+            const h = getHomographyMatrix(src, corners);
+            // CSS matrix3d is column-major:
+            // matrix3d(a, d, 0, g,  b, e, 0, h,  0, 0, 1, 0,  c, f, 0, 1)
+            return `matrix3d(${h[0]}, ${h[3]}, 0, ${h[6]}, ${h[1]}, ${h[4]}, 0, ${h[7]}, 0, 0, 1, 0, ${h[2]}, ${h[5]}, 0, 1)`;
+        }
+
+        /**
+         * PROCEDURAL GENERATIVE VJ LOOPS (HTML5 Canvas Generators)
+         */
+        function setupCanvasGenerators() {
+            const types = ['gen-grid', 'gen-matrix', 'gen-particles', 'gen-spectrum', 'gen-tunnel'];
+            
+            types.forEach(type => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 640;
+                canvas.height = 360;
+                const ctx = canvas.getContext('2d');
+                canvasGenerators[type] = { canvas, ctx, time: 0 };
+            });
+
+            function renderLoop() {
+                if (!state.isPlayingAll) {
+                    requestAnimationFrame(renderLoop);
+                    return;
+                }
+                // 1. Neon Cyber Grid
+                {
+                    const { canvas, ctx } = canvasGenerators['gen-grid'];
+                    let g = canvasGenerators['gen-grid'];
+                    g.time += 0.03;
+                    ctx.fillStyle = '#050515';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    ctx.save();
+                    ctx.strokeStyle = '#6366f1';
+                    ctx.lineWidth = 1.5;
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = '#818cf8';
+
+                    const horizon = canvas.height * 0.4;
+                    const cx = canvas.width / 2;
+
+                    // Perspective lines
+                    for (let x = -canvas.width; x <= canvas.width * 2; x += 40) {
+                        ctx.beginPath();
+                        ctx.moveTo(cx, horizon);
+                        ctx.lineTo(x, canvas.height);
+                        ctx.stroke();
+                    }
+
+                    // Horizontal moving grid lines
+                    const offset = (g.time * 40) % 30;
+                    for (let y = horizon; y < canvas.height; y += 15) {
+                        const ly = horizon + Math.pow((y - horizon) / (canvas.height - horizon), 1.8) * (canvas.height - horizon) + offset;
+                        if (ly <= canvas.height) {
+                            ctx.beginPath();
+                            ctx.moveTo(0, ly);
+                            ctx.lineTo(canvas.width, ly);
+                            ctx.stroke();
+                        }
+                    }
+
+                    // Pulsing Sun
+                    const sunGrad = ctx.createRadialGradient(cx, horizon - 20, 5, cx, horizon - 20, 60);
+                    sunGrad.addColorStop(0, '#ec4899');
+                    sunGrad.addColorStop(1, 'transparent');
+                    ctx.fillStyle = sunGrad;
+                    ctx.beginPath();
+                    ctx.arc(cx, horizon - 20, 60, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+
+                // 2. Matrix Digital Rain
+                {
+                    const { canvas, ctx } = canvasGenerators['gen-matrix'];
+                    let g = canvasGenerators['gen-matrix'];
+                    if (!g.drops) {
+                        g.cols = Math.floor(canvas.width / 16);
+                        g.drops = new Array(g.cols).fill(0).map(() => Math.random() * -50);
+                    }
+                    ctx.fillStyle = 'rgba(5, 10, 5, 0.15)';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    ctx.fillStyle = '#22c55e';
+                    ctx.font = '14px monospace';
+                    const chars = '0123456789ABCDEFｦｱｳｴｵｶｷｹｺｻｼｽｾｿﾀﾂﾃ';
+
+                    for (let i = 0; i < g.drops.length; i++) {
+                        const char = chars[Math.floor(Math.random() * chars.length)];
+                        const x = i * 16;
+                        const y = g.drops[i] * 16;
+
+                        ctx.fillStyle = '#86efac';
+                        ctx.fillText(char, x, y);
+                        ctx.fillStyle = '#22c55e';
+                        ctx.fillText(chars[Math.floor(Math.random() * chars.length)], x, y - 16);
+
+                        if (y > canvas.height && Math.random() > 0.975) {
+                            g.drops[i] = 0;
+                        }
+                        g.drops[i]++;
+                    }
+                }
+
+                // 3. Particle Cloud Swarm
+                {
+                    const { canvas, ctx } = canvasGenerators['gen-particles'];
+                    let g = canvasGenerators['gen-particles'];
+                    g.time += 0.02;
+                    if (!g.particles) {
+                        g.particles = new Array(60).fill(0).map(() => ({
+                            x: Math.random() * canvas.width,
+                            y: Math.random() * canvas.height,
+                            vx: (Math.random() - 0.5) * 2,
+                            vy: (Math.random() - 0.5) * 2,
+                            radius: Math.random() * 3 + 1
+                        }));
+                    }
+                    ctx.fillStyle = 'rgba(10, 15, 30, 0.2)';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    g.particles.forEach((p, idx) => {
+                        p.x += p.vx;
+                        p.y += p.vy;
+                        if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+                        if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                        ctx.fillStyle = '#38bdf8';
+                        ctx.fill();
+
+                        // Draw spring lines between close particles
+                        for (let j = idx + 1; j < g.particles.length; j++) {
+                            const p2 = g.particles[j];
+                            const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
+                            if (dist < 90) {
+                                ctx.beginPath();
+                                ctx.moveTo(p.x, p.y);
+                                ctx.lineTo(p2.x, p2.y);
+                                ctx.strokeStyle = `rgba(56, 189, 248, ${1 - dist / 90})`;
+                                ctx.lineWidth = 0.8;
+                                ctx.stroke();
+                            }
+                        }
+                    });
+                }
+
+                // 4. Equalizer Spectrum
+                {
+                    const { canvas, ctx } = canvasGenerators['gen-spectrum'];
+                    let g = canvasGenerators['gen-spectrum'];
+                    g.time += 0.05;
+                    ctx.fillStyle = '#0f051d';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const bars = 24;
+                    const barWidth = canvas.width / bars;
+
+                    for (let i = 0; i < bars; i++) {
+                        const h = (Math.sin(g.time * 2 + i * 0.4) * 0.4 + 0.5) * (canvas.height * 0.7);
+                        const grad = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - h);
+                        grad.addColorStop(0, '#3b82f6');
+                        grad.addColorStop(0.5, '#a855f7');
+                        grad.addColorStop(1, '#f43f5e');
+
+                        ctx.fillStyle = grad;
+                        ctx.fillRect(i * barWidth + 4, canvas.height - h, barWidth - 8, h);
+                    }
+                }
+
+                // 5. Geometry Tunnel
+                {
+                    const { canvas, ctx } = canvasGenerators['gen-tunnel'];
+                    let g = canvasGenerators['gen-tunnel'];
+                    g.time += 0.03;
+                    ctx.fillStyle = '#000000';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const cx = canvas.width / 2;
+                    const cy = canvas.height / 2;
+
+                    for (let i = 10; i > 0; i--) {
+                        const size = ((g.time * 40 + i * 35) % 350);
+                        const angle = g.time + i * 0.1;
+
+                        ctx.save();
+                        ctx.translate(cx, cy);
+                        ctx.rotate(angle);
+                        ctx.strokeStyle = `hsl(${(i * 30 + g.time * 50) % 360}, 80%, 60%)`;
+                        ctx.lineWidth = 3;
+                        ctx.strokeRect(-size / 2, -size / 2, size, size);
+                        ctx.restore();
+                    }
+                }
+
+                requestAnimationFrame(renderLoop);
+            }
+
+            renderLoop();
+        }
+
+        /**
+         * FACADE BACKGROUND RENDERER
+         */
+        function renderFacadeBackground() {
+            const bgLayer = document.getElementById('facade-bg-layer');
+            bgLayer.style.opacity = state.facadeOpacity;
+
+            if (state.facadeBg === 'palace') {
+                bgLayer.innerHTML = `
+                    <svg width="100%" height="100%" viewBox="0 0 1280 720" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="1280" height="720" fill="#0b132b"/>
+                        <!-- Palace Roof / Pediment -->
+                        <polygon points="100,220 640,60 1180,220" fill="#1c2541" stroke="#3a506b" stroke-width="4"/>
+                        <polygon points="140,210 640,80 1140,210" fill="#0b132b"/>
+                        <!-- Main Facade Wall -->
+                        <rect x="120" y="220" width="1040" height="460" fill="#1c2541" stroke="#3a506b" stroke-width="4"/>
+                        <!-- Columns -->
+                        <rect x="220" y="240" width="40" height="420" fill="#3a506b"/>
+                        <rect x="420" y="240" width="40" height="420" fill="#3a506b"/>
+                        <rect x="820" y="240" width="40" height="420" fill="#3a506b"/>
+                        <rect x="1020" y="240" width="40" height="420" fill="#3a506b"/>
+                        <!-- Windows Layer Upper -->
+                        <rect x="300" y="270" width="80" height="130" rx="40" fill="#000" stroke="#5bc0be" stroke-width="3"/>
+                        <rect x="520" y="270" width="240" height="130" rx="10" fill="#000" stroke="#5bc0be" stroke-width="3"/>
+                        <rect x="900" y="270" width="80" height="130" rx="40" fill="#000" stroke="#5bc0be" stroke-width="3"/>
+                        <!-- Windows Layer Lower / Entrance -->
+                        <rect x="300" y="470" width="80" height="170" fill="#000" stroke="#5bc0be" stroke-width="3"/>
+                        <rect x="560" y="440" width="160" height="200" rx="80" fill="#000" stroke="#e0a96d" stroke-width="4"/>
+                        <rect x="900" y="470" width="80" height="170" fill="#000" stroke="#5bc0be" stroke-width="3"/>
+                        <!-- Decorative Moldings -->
+                        <line x1="120" y1="420" x2="1160" y2="420" stroke="#5bc0be" stroke-width="3"/>
+                    </svg>
+                `;
+            } else if (state.facadeBg === 'modern') {
+                bgLayer.innerHTML = `
+                    <svg width="100%" height="100%" viewBox="0 0 1280 720" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="1280" height="720" fill="#020617"/>
+                        <!-- Skyscraper outline -->
+                        <rect x="200" y="40" width="880" height="680" fill="#0f172a" stroke="#1e293b" stroke-width="4"/>
+                        <!-- Glass Grid Lines -->
+                        <path d="M 200 120 L 1080 120 M 200 200 L 1080 200 M 200 280 L 1080 280 M 200 360 L 1080 360 M 200 440 L 1080 440 M 200 520 L 1080 520 M 200 600 L 1080 600" stroke="#0284c7" stroke-width="2" opacity="0.4"/>
+                        <path d="M 310 40 L 310 720 M 420 40 L 420 720 M 530 40 L 530 720 M 640 40 L 640 720 M 750 40 L 750 720 M 860 40 L 860 720 M 970 40 L 970 720" stroke="#0284c7" stroke-width="2" opacity="0.4"/>
+                    </svg>
+                `;
+            } else if (state.facadeBg === 'brick') {
+                bgLayer.innerHTML = `
+                    <svg width="100%" height="100%" viewBox="0 0 1280 720" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="1280" height="720" fill="#1c0a00"/>
+                        <pattern id="brick-pattern" width="60" height="30" patternUnits="userSpaceOnUse">
+                            <rect width="58" height="13" fill="#431407" rx="2"/>
+                            <rect y="15" x="30" width="58" height="13" fill="#3f1206" rx="2"/>
+                            <rect y="15" x="-30" width="58" height="13" fill="#3f1206" rx="2"/>
+                        </pattern>
+                        <rect width="1280" height="720" fill="url(#brick-pattern)"/>
+                        <!-- Arch Window -->
+                        <path d="M 440 500 L 440 250 A 200 200 0 0 1 840 250 L 840 500 Z" fill="#000" stroke="#78350f" stroke-width="12"/>
+                    </svg>
+                `;
+            } else if (state.facadeBg === 'none') {
+                bgLayer.innerHTML = '<div class="w-full h-full bg-black"></div>';
+            } else {
+                // Custom uploaded image URL
+                bgLayer.innerHTML = `<img src="${state.facadeBg}" class="w-full h-full object-cover">`;
+            }
+        }
+
+        /**
+         * SURFACE MANAGEMENT
+         */
+        function meshSize(surf) {
+            return { rows: surf.meshRows || 3, cols: surf.meshCols || 3 };
+        }
+        function resizeMesh(surf, rows, cols) {
+            rememberChange();
+            rows = Math.max(2, Math.min(10, Math.round(Number(rows) || 3)));
+            cols = Math.max(2, Math.min(10, Math.round(Number(cols) || 3)));
+            const old = surf.corners;
+            const size = meshSize(surf);
+            function sample(u, v) {
+                if (!surf.isMesh) {
+                    return { x: (1-v)*((1-u)*old[0].x+u*old[1].x)+v*((1-u)*old[3].x+u*old[2].x),
+                             y: (1-v)*((1-u)*old[0].y+u*old[1].y)+v*((1-u)*old[3].y+u*old[2].y) };
+                }
+                const x=u*(size.cols-1), y=v*(size.rows-1);
+                const c=Math.min(size.cols-2, Math.floor(x)), r=Math.min(size.rows-2, Math.floor(y));
+                const a=x-c, b=y-r;
+                const ids=[r*size.cols+c,r*size.cols+c+1,(r+1)*size.cols+c+1,(r+1)*size.cols+c];
+                const weights=[(1-a)*(1-b),a*(1-b),a*b,(1-a)*b];
+                return {x:ids.reduce((n,i,k)=>n+old[i].x*weights[k],0),y:ids.reduce((n,i,k)=>n+old[i].y*weights[k],0)};
+            }
+            const points=[];
+            for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) points.push(sample(c/(cols-1),r/(rows-1)));
+            surf.corners=points; surf.meshRows=rows; surf.meshCols=cols; surf.isMesh=true;
+            state.activeMeshIndex=0; state.activeCornerIndex=null;
+        }
+
+        function createSurface(label = null, initialCorners = null, isMesh = false) {
+            rememberChange();
+            const id = 'surf_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+            const index = state.surfaces.length + 1;
+
+            const defaultW = 400;
+            const defaultH = 250;
+            const offsetX = 200 + (index * 40) % 400;
+            const offsetY = 150 + (index * 30) % 300;
+
+            let corners = initialCorners;
+            if (!corners) {
+                if (isMesh) {
+                    // 3x3 Grid of points (9 points)
+                    corners = [];
+                    for (let r = 0; r < 3; r++) {
+                        for (let c = 0; c < 3; c++) {
+                            corners.push({
+                                x: offsetX + c * (defaultW / 2),
+                                y: offsetY + r * (defaultH / 2)
+                            });
+                        }
+                    }
+                } else {
+                    // Standard 4 corners (Quad)
+                    corners = [
+                        { x: offsetX, y: offsetY },                   // NW
+                        { x: offsetX + defaultW, y: offsetY },         // NE
+                        { x: offsetX + defaultW, y: offsetY + defaultH },// SE
+                        { x: offsetX, y: offsetY + defaultH }          // SW
+                    ];
+                }
+            }
+
+            const surface = {
+                id,
+                label: label || `Powierzchnia ${index}`,
+                visible: true,
+                locked: false,
+                isMesh: isMesh || corners.length === 9,
+                sourceType: 'gen-grid',
+                sourceUrl: '',
+                corners,
+                opacity: 1,
+                brightness: 1,
+                contrast: 1,
+                hue: 0,
+                blendMode: 'normal',
+                width: 640,
+                height: 360
+            };
+
+            state.surfaces.push(surface);
+            state.activeSurfaceId = id;
+
+            renderAllSurfacesDOM();
+            updateSurfacesListUI();
+            updateInspectorUI();
+
+            showToast(`Dodano nową powierzchnię: ${surface.label}`, 'success');
+        }
+
+        let pendingDeleteSurfaceId = null;
+        let pendingDeleteMaskId = null;
+        let maskDrag = null;
+        function deleteSurface(id) {
+            const surface = state.surfaces.find(s => s.id === id);
+            if (!surface) return;
+            pendingDeleteMaskId = null;
+            pendingDeleteSurfaceId = id;
+            document.getElementById('delete-layer-name').textContent = surface.label;
+            const dialog = document.getElementById('delete-layer-dialog');
+            if (!dialog.open) dialog.showModal();
+            document.getElementById('delete-layer-cancel').focus();
+        }
+        function confirmDeleteSurface() {
+            rememberChange();
+            if (pendingDeleteMaskId) {
+                state.masks = state.masks.filter(m => m.id !== pendingDeleteMaskId);
+                if (state.activeMaskId === pendingDeleteMaskId) state.activeMaskId = null;
+                pendingDeleteMaskId = null;
+                document.getElementById('delete-layer-dialog').close();
+                renderAllSurfacesDOM(); updateMasksUI(); return;
+            }
+            const id = pendingDeleteSurfaceId;
+            if (!id || !state.surfaces.some(s => s.id === id)) return;
+            document.getElementById('delete-layer-dialog').close();
+            pendingDeleteSurfaceId = null;
+            state.surfaces = state.surfaces.filter(s => s.id !== id);
+            if (state.activeSurfaceId === id) {
+                state.activeSurfaceId = state.surfaces.length > 0 ? state.surfaces[state.surfaces.length - 1].id : null;
+            }
+            renderAllSurfacesDOM();
+            updateSurfacesListUI();
+            updateInspectorUI();
+            showToast('Usunięto warstwę mapowania', 'info');
+        }
+
+        function duplicateSurface(id) {
+            const surf = state.surfaces.find(s => s.id === id);
+            if (!surf) return;
+            
+            const newCorners = surf.corners.map(c => ({ x: c.x + 30, y: c.y + 30 }));
+            createSurface(`${surf.label} (Kopia)`, newCorners, surf.isMesh);
+        }
+
+        /**
+         * RENDER DOM SURFACES AND WARP TRANSFORM
+         */
+        function selectMask(id) {
+            state.activeMaskId=id; state.activeSurfaceId=null;
+            renderAllSurfacesDOM(); updateSurfacesListUI(); updateInspectorUI();
+        }
+        function updateMasksUI() {
+            document.getElementById('mask-count').textContent=state.masks.length;
+            const list=document.getElementById('masks-list'); list.innerHTML='';
+            state.masks.forEach(mask => {
+                const row=document.createElement('div');
+                row.className='p-2 rounded border flex items-center justify-between text-xs '+(state.activeMaskId===mask.id?'border-amber-400 bg-slate-800':'border-slate-700');
+                const name=document.createElement('button'); name.type='button'; name.textContent=mask.label;
+                name.style.cssText='flex:1;text-align:left;cursor:pointer'; name.onclick=()=>selectMask(mask.id); row.appendChild(name);
+                const visibility=document.createElement('button'); visibility.type='button'; visibility.textContent=mask.visible?'👁':'—'; visibility.title='Pokaż / ukryj maskę';
+                visibility.style.padding='8px'; visibility.onclick=()=>{rememberChange();mask.visible=!mask.visible;renderAllSurfacesDOM();}; row.appendChild(visibility);
+                const remove=document.createElement('button'); remove.type='button'; remove.textContent='🗑'; remove.title='Usuń maskę'; remove.style.padding='8px';
+                remove.onclick=()=>{
+                    pendingDeleteSurfaceId=null; pendingDeleteMaskId=mask.id;
+                    document.getElementById('delete-layer-name').textContent=mask.label;
+                    document.getElementById('delete-layer-dialog').showModal();
+                }; row.appendChild(remove); list.appendChild(row);
+                const tools=document.createElement('div');tools.className='text-xs px-2 pb-2 text-amber-300';
+                const add=document.createElement('button');add.type='button';add.textContent=`+ Punkt (${mask.points.length})`;add.title='Dodaj punkt na środku najdłuższego boku';add.disabled=mask.points.length>=64;add.onclick=()=>addMaskPoint(mask.id);
+                tools.appendChild(add);list.appendChild(tools);
+            });
+        }
+
+        function fitLayerToImage(surf, width, height) {
+            if(!(width>0 && height>0)) return;
+            const xs=surf.corners.map(p=>p.x),ys=surf.corners.map(p=>p.y);
+            const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+            const oldHeight=maxY-minY,centerY=(minY+maxY)/2;
+            const targetHeight=(maxX-minX)*height/width;
+            if(oldHeight>0 && targetHeight>0) surf.corners=surf.corners.map(p=>({x:p.x,y:centerY+(p.y-centerY)*targetHeight/oldHeight}));
+            surf.height=surf.width*height/width;
+            surf.imageWidth=width;surf.imageHeight=height;surf.imageAspectFittedUrl=surf.sourceUrl;
+        }
+
+        function detectMediaKind(name, mime='') {
+            const clean=String(name).split(/[?#]/)[0];
+            if(mime.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(clean) || /^data:image\//i.test(name)) return 'image';
+            if(mime.startsWith('video/') || /\.(mp4|webm|og[gv])$/i.test(clean) || /^data:video\//i.test(name)) return 'video';
+            return null;
+        }
+        function surfaceMediaKind(surf) {
+            return surf.sourceMediaKind || detectMediaKind(surf.sourceFileName || surf.sourceUrl, surf.sourceMime || '') || (surf.sourceType==='custom-file' ? 'video' : 'image');
+        }
+
+        const videoSources = new Map();
+        function surfaceVideo(surf) {
+            let video=videoSources.get(surf.id);
+            if(video && video.getAttribute('src')!==surf.sourceUrl) {video.pause();video.removeAttribute('src');video.load();video=null;}
+            if(!video) {
+                video=document.createElement('video');video.src=surf.sourceUrl;
+                video.loop=true;video.muted=true;video.playsInline=true;video.className='surface-content';
+                configureSurfaceVideo(video,surf.id);videoSources.set(surf.id,video);
+            }
+            video.autoplay=state.isPlayingAll;
+            // Odtwarzanie uruchamiamy dopiero po osadzeniu filmu w DOM.
+            if(!state.isPlayingAll) video.pause();
+            return video;
+        }
+        let geometryFrame=null;
+        function requestGeometryUpdate() {
+            if(geometryFrame!==null) return;
+            geometryFrame=requestAnimationFrame(()=>{geometryFrame=null;updateGeometry();});
+        }
+        function updateGeometry() {
+            state.surfaces.forEach(surf=>{
+                if(!surf.visible) return;
+                if(!surf.isMesh) {
+                    const wrap=document.getElementById(`wrap_${surf.id}`);
+                    if(wrap) wrap.style.transform=computeCSSMatrix3D(surf.width,surf.height,surf.corners);
+                } else {
+                    const {rows,cols}=meshSize(surf);
+                    document.querySelectorAll('[data-mesh-surface]').forEach(el=>{
+                        if(el.dataset.meshSurface!==surf.id) return;
+                        const i=Number(el.dataset.meshIndex);
+                        el.style.transform=computeCSSMatrix3D(surf.width/(cols-1),surf.height/(rows-1),[surf.corners[i],surf.corners[i+1],surf.corners[i+cols+1],surf.corners[i+cols]]);
+                    });
+                }
+                document.querySelectorAll('[data-shape-surface]').forEach(el=>{
+                    if(el.dataset.shapeSurface!==surf.id) return;
+                    const points=el.dataset.indices.split(',').map(i=>surf.corners[Number(i)]);
+                    if(el.tagName.toLowerCase()==='path') el.setAttribute('d','M '+points.map(p=>`${p.x} ${p.y}`).join(' L ')+' Z');
+                    else el.setAttribute('points',points.map(p=>`${p.x},${p.y}`).join(' '));
+                });
+            });
+            document.querySelectorAll('#handles-layer [data-surface-id]').forEach(el=>{
+                const surf=state.surfaces.find(s=>s.id===el.dataset.surfaceId),p=surf?.corners[Number(el.dataset.pointIndex)];
+                if(p){el.style.left=`${p.x}px`;el.style.top=`${p.y}px`;}
+            });
+            state.masks.forEach(mask=>{
+                document.querySelectorAll('[data-drag-mask]').forEach(el=>{
+                    if(el.dataset.dragMask!==mask.id) return;
+                    if(el.dataset.maskPoint!==undefined){const p=mask.points[Number(el.dataset.maskPoint)];el.style.left=`${p.x}px`;el.style.top=`${p.y}px`;}
+                    else el.setAttribute('points',mask.points.map(p=>`${p.x},${p.y}`).join(' '));
+                });
+            });
+        }
+        const videoPlaybackPositions = new Map();
+        function configureSurfaceVideo(video, surfaceId) {
+            video.dataset.surfaceId = surfaceId;
+            video.autoplay = state.isPlayingAll;
+            video.addEventListener('loadedmetadata', () => {
+                const saved = videoPlaybackPositions.get(surfaceId);
+                if (Number.isFinite(saved)) video.currentTime = saved;
+                if (state.isPlayingAll) video.play().catch(() => {});
+                else video.pause();
+            }, { once: true });
+        }
+        function renderAllSurfacesDOM() {
+            const stackEl = document.getElementById('surfaces-stack');
+            const handlesEl = document.getElementById('handles-layer');
+            const svgOverlay = document.getElementById('vector-overlay-svg');
+
+            videoSources.forEach((video,id)=>{
+                const surf=state.surfaces.find(s=>s.id===id);
+                if(!surf || !surf.visible || surfaceMediaKind(surf)!=='video' || surf.sourceUrl!==video.getAttribute('src')) {video.pause();video.removeAttribute('src');video.load();videoSources.delete(id);}
+            });
+            stackEl.replaceChildren();
+            handlesEl.replaceChildren();
+
+            let svgContent = '';
+
+            state.surfaces.forEach((surf) => {
+                if (!surf.visible) return;
+
+                const wrap = document.createElement('div');
+                wrap.id = `wrap_${surf.id}`;
+                wrap.className = 'surface-wrapper';
+                wrap.style.width = `${surf.width}px`;
+                wrap.style.height = `${surf.height}px`;
+                wrap.style.mixBlendMode = surf.blendMode === 'additive' ? 'plus-lighter' : surf.blendMode;
+                wrap.style.filter = `brightness(${surf.brightness}) contrast(${surf.contrast}) hue-rotate(${surf.hue}deg) opacity(${surf.opacity})`;
+
+                if (surf.sourceType.startsWith('gen-')) {
+                    const canvasGen = canvasGenerators[surf.sourceType];
+                    if (canvasGen) {
+                        const canvasCopy = document.createElement('canvas');
+                        canvasCopy.width = surf.width;
+                        canvasCopy.height = surf.height;
+                        canvasCopy.className = 'surface-content';
+                        
+                        const ctxCopy = canvasCopy.getContext('2d');
+                        function updateFrame() {
+                            if (wrap.isConnected) {
+                                ctxCopy.drawImage(canvasGen.canvas, 0, 0, surf.width, surf.height);
+                                requestAnimationFrame(updateFrame);
+                            }
+                        }
+                        requestAnimationFrame(updateFrame);
+                        wrap.appendChild(canvasCopy);
+                    }
+                } else if (surf.sourceType === 'custom-file' || surf.sourceType === 'custom-url') {
+                    if (surf.sourceUrl) {
+                        if (surfaceMediaKind(surf) === 'video') {
+                            const video = surfaceVideo(surf);
+                            wrap.appendChild(video);
+                            // Po dołączeniu do DOM wznawiamy film nawet po przebudowie warstw.
+                            queueMicrotask(() => {
+                                if (state.isPlayingAll && video.isConnected && video.paused) {
+                                    video.play().catch(err => console.warn('Nie można odtworzyć filmu:', err));
+                                }
+                            });
+                        } else {
+                            const img = document.createElement('img');
+                            img.addEventListener('error',()=>showToast('Nie można wyświetlić grafiki. Sprawdź format i plik.','error'),{once:true});
+                            img.alt = surf.sourceFileName || surf.label;
+                            const imageUrl=surf.sourceUrl;
+                            img.addEventListener('load',()=>{
+                                if(surf.sourceUrl!==imageUrl) return;
+                                surf.imageWidth=img.naturalWidth;surf.imageHeight=img.naturalHeight;
+                                if(surf.preserveImageAspect && surf.imageAspectFittedUrl!==imageUrl) {
+                                    fitLayerToImage(surf,img.naturalWidth,img.naturalHeight);
+                                    renderAllSurfacesDOM();updateInspectorUI();
+                                }
+                            },{once:true});
+                            img.src = imageUrl;
+                            img.className = 'surface-content';
+                            img.style.objectFit = 'fill';
+                            img.style.objectPosition = 'center';
+                            wrap.appendChild(img);
+                        }
+                    } else {
+                        const placeholder = document.createElement('div');
+                        placeholder.className = 'surface-content bg-slate-800 text-slate-400 flex flex-col items-center justify-center font-mono text-xs p-4 text-center border border-dashed border-slate-600';
+                        placeholder.innerHTML = `<i class="fa-solid fa-film text-2xl mb-2 text-brand-400"></i><div>Brak filmu lub grafiki</div>`;
+                        wrap.appendChild(placeholder);
+                    }
+                }
+
+                // If standard 4-corner quad, apply homography matrix3d
+                if (!surf.isMesh && surf.corners.length === 4) {
+                    const matrixStr = computeCSSMatrix3D(surf.width, surf.height, surf.corners);
+                    wrap.style.transform = matrixStr;
+                    stackEl.appendChild(wrap);
+
+                    const c = surf.corners;
+                    const pathD = `M ${c[0].x} ${c[0].y} L ${c[1].x} ${c[1].y} L ${c[2].x} ${c[2].y} L ${c[3].x} ${c[3].y} Z`;
+                    const isActive = surf.id === state.activeSurfaceId;
+
+                    svgContent += `
+                        <path data-shape-surface="${surf.id}" data-indices="0,1,2,3" d="${pathD}" fill="none" 
+                              class="surface-outline" stroke="${isActive ? '#22c55e' : 'rgba(99, 102, 241, 0.4)'}" 
+                              stroke-width="${isActive ? 2 : 1}" 
+                              stroke-dasharray="${isActive ? 'none' : '4,4'}" />
+                    `;
+                } else if (surf.isMesh) {
+                    const {rows, cols} = meshSize(surf);
+                    // Film będący źródłem tekstury siatki musi pozostać podłączony
+                    // do dokumentu, choć jego obraz pokazują wyłącznie fragmenty canvas.
+                    if (wrap.firstChild?.tagName === 'VIDEO') {
+                        const sourceVideo = wrap.firstChild;
+                        const mediaHost = document.createElement('div');
+                        mediaHost.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden;';
+                        mediaHost.appendChild(sourceVideo);
+                        stackEl.appendChild(mediaHost);
+                        queueMicrotask(() => {
+                            if (state.isPlayingAll && sourceVideo.isConnected && sourceVideo.paused) {
+                                sourceVideo.play().catch(err => console.warn('Nie można odtworzyć filmu siatki:', err));
+                            }
+                        });
+                    }
+                    for (let r=0;r<rows-1;r++) for(let c=0;c<cols-1;c++) {
+                        const sw=surf.width/(cols-1), sh=surf.height/(rows-1);
+                        const subWrap=document.createElement('div');
+                        subWrap.className='surface-wrapper';
+                        subWrap.dataset.meshSurface=surf.id;subWrap.dataset.meshIndex=r*cols+c;
+                        subWrap.style.width=`${sw}px`; subWrap.style.height=`${sh}px`;
+                        subWrap.style.overflow='hidden';
+                        subWrap.style.mixBlendMode=wrap.style.mixBlendMode;
+                        subWrap.style.filter=wrap.style.filter;
+                        stackEl.appendChild(subWrap);
+                        if(surf.sourceType.startsWith('gen-') || (['custom-file','custom-url'].includes(surf.sourceType) && surfaceMediaKind(surf)==='video')) {
+                            const source=surf.sourceType.startsWith('gen-')?canvasGenerators[surf.sourceType]?.canvas:videoSources.get(surf.id);
+                            if(source) {
+                                const canvas=document.createElement('canvas');
+                                canvas.width=Math.ceil(sw); canvas.height=Math.ceil(sh);
+                                canvas.className='surface-content'; subWrap.appendChild(canvas);
+                                const ctx=canvas.getContext('2d');
+                                let lastFrame=-Infinity, painted=false;
+                                function frame(timestamp=0) {
+                                    if(!subWrap.isConnected) return;
+                                    const w=source.videoWidth||source.width,h=source.videoHeight||source.height;
+                                    if(w && h && (source.tagName!=='VIDEO'||source.readyState>=2) && (!painted || state.isPlayingAll) && timestamp-lastFrame>=33) {
+                                        ctx.drawImage(source,c*w/(cols-1),r*h/(rows-1),w/(cols-1),h/(rows-1),0,0,canvas.width,canvas.height);
+                                        lastFrame=timestamp;painted=true;
+                                    }
+                                    requestAnimationFrame(frame);
+                                }
+                                frame();
+                            }
+                        } else if(wrap.firstChild) {
+                            const content=wrap.firstChild.cloneNode(true);
+                            if(content.tagName === 'VIDEO') configureSurfaceVideo(content, surf.id);
+                            content.style.width=`${surf.width}px`; content.style.height=`${surf.height}px`;
+                            content.style.maxWidth='none'; content.style.position='absolute';
+                            content.style.left=`${-c*sw}px`; content.style.top=`${-r*sh}px`;
+                            subWrap.appendChild(content);
+                        }
+                        const i=r*cols+c;
+                        subWrap.style.transform=computeCSSMatrix3D(sw,sh,[surf.corners[i],surf.corners[i+1],surf.corners[i+cols+1],surf.corners[i+cols]]);
+                    }
+                    const stroke=surf.id===state.activeSurfaceId ? '#22c55e' : '#6366f1';
+                    for(let r=0;r<rows;r++) {
+                        const pts=surf.corners.slice(r*cols,(r+1)*cols).map(p=>`${p.x},${p.y}`).join(' ');
+                        svgContent+=`<polyline class="surface-outline" data-shape-surface="${surf.id}" data-indices="${surf.corners.map((_,i)=>i).filter(i=>Math.floor(i/cols)===r).join(',')}" points="${pts}" fill="none" stroke="${stroke}" stroke-width="1"/>`;
+                    }
+                    for(let c=0;c<cols;c++) {
+                        const pts=Array.from({length:rows},(_,r)=>surf.corners[r*cols+c]).map(p=>`${p.x},${p.y}`).join(' ');
+                        svgContent+=`<polyline class="surface-outline" data-shape-surface="${surf.id}" data-indices="${Array.from({length:rows},(_,r)=>r*cols+c).join(',')}" points="${pts}" fill="none" stroke="${stroke}" stroke-width="1"/>`;
+                    }
+                }
+
+                // Transparent hit regions follow each warped cell, below the point handles.
+                if (!surf.locked) {
+                    const hitQuads = [];
+                    if (surf.isMesh) {
+                        const {rows, cols}=meshSize(surf);
+                        for(let r=0;r<rows-1;r++) for(let c=0;c<cols-1;c++) {
+                            const i=r*cols+c;
+                            hitQuads.push([i,i+1,i+cols+1,i+cols]);
+                        }
+                    } else hitQuads.push([0,1,2,3]);
+                    hitQuads.forEach(indices => {
+                        const points=indices.map(i=>`${surf.corners[i].x},${surf.corners[i].y}`).join(' ');
+                        svgContent+=`<polygon data-shape-surface="${surf.id}" data-indices="${indices.join(',')}" class="surface-drag-area" data-drag-surface="${surf.id}" points="${points}" fill="transparent" stroke="none" style="pointer-events:all;touch-action:none;cursor:move"/>`;
+                    });
+                }
+
+                // If active surface, create interactive draggable handles
+                const isSurfaceActive = surf.id === state.activeSurfaceId;
+                if (isSurfaceActive && !surf.locked) {
+                    surf.corners.forEach((pt, cIdx) => {
+                        const handle = document.createElement('div');
+                        handle.className = surf.isMesh ? `mesh-handle ${state.activeMeshIndex === cIdx ? 'active' : ''}` : `corner-handle ${state.activeCornerIndex === cIdx ? 'active' : ''}`;
+                        handle.style.left = `${pt.x}px`;
+                        handle.style.top = `${pt.y}px`;
+                        handle.dataset.surfaceId = surf.id;
+                        handle.dataset.pointIndex = cIdx;
+
+                        const labels = surf.isMesh ? surf.corners.map((_,i)=>`P${i+1}`) : ['NW', 'NE', 'SE', 'SW'];
+                        handle.innerHTML = `<div class="handle-label">${labels[cIdx] || cIdx}</div>`;
+
+                        handle.addEventListener('pointerdown', (e) => {
+                            if (dragPointerId !== null || (e.pointerType === 'mouse' && e.button !== 0)) return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const viewport = document.getElementById('viewport-container');
+                            const position = pointerToScene(e);
+                            dragPointerId = e.pointerId;
+                            // The handle persists between drags; read the current point,
+                            // not the object captured when this handle was first created.
+                            const currentPoint = surf.corners[cIdx];
+                            dragOffset = {
+                                x: currentPoint.x - position.x,
+                                y: currentPoint.y - position.y
+                            };
+                            proportionalDrag=e.shiftKey?makeProportionalDrag(surf,cIdx):null;
+                            rememberChange();
+                            state.isDragging = true;
+                            state.dragType = surf.isMesh ? 'mesh' : 'corner';
+                            state.activeSurfaceId = surf.id;
+                            if (surf.isMesh) {
+                                state.activeMeshIndex = cIdx;
+                            } else {
+                                state.activeCornerIndex = cIdx;
+                            }
+                            // The viewport survives re-rendering; individual handles do not.
+                            viewport.setPointerCapture(e.pointerId);
+                            updateInspectorUI();
+                        });
+
+                        handlesEl.appendChild(handle);
+                    });
+                }
+            });
+
+            // Render Masks on SVG Overlay
+            state.masks.forEach(mask => {
+                if (!mask.visible) return;
+                const ptsStr = mask.points.map(p => `${p.x},${p.y}`).join(' ');
+                svgContent += `
+                    <polygon class="projection-mask" data-drag-mask="${mask.id}" style="pointer-events:all;touch-action:none;cursor:move" points="${ptsStr}" fill="${mask.fillColor}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3,3" opacity="${mask.opacity}"/>
+                `;
+            });
+
+            svgOverlay.innerHTML = svgContent;
+            const activeMask=state.masks.find(m=>m.id===state.activeMaskId && m.visible);
+            if(activeMask) activeMask.points.forEach((pt,index)=>{
+                const handle=document.createElement('div'); handle.className='mesh-handle';
+                handle.style.left=`${pt.x}px`; handle.style.top=`${pt.y}px`;
+                handle.dataset.dragMask=activeMask.id; handle.dataset.maskPoint=index;
+                handlesEl.appendChild(handle);
+            });
+            updateMasksUI();
+        }
+
+        /**
+         * UI CONTROLS & SIDEBAR UPDATES
+         */
+        function updateSurfacesListUI() {
+            const container = document.getElementById('surfaces-list');
+            document.getElementById('surface-count').textContent = state.surfaces.length;
+
+            if (state.surfaces.length === 0) {
+                container.innerHTML = `<div class="text-xs text-slate-500 text-center py-4">Brak powierzchii. Kliknij "+ Dodaj Powierzchnię"</div>`;
+                return;
+            }
+
+            container.innerHTML = [...state.surfaces].reverse().map((surf, idx) => {
+                const isActive = surf.id === state.activeSurfaceId;
+                return `
+                    <div class="surface-item p-2 rounded-lg border text-xs transition cursor-pointer flex items-center justify-between ${
+                        isActive ? 'bg-brand-900/40 border-brand-500 text-slate-100 shadow' : 'bg-slate-800/60 border-slate-700/60 text-slate-300 hover:bg-slate-800'
+                    }" draggable="true" data-layer-id="${surf.id}" ondragstart="layerDragStart(event, '${surf.id}')" ondragover="layerDragOver(event)" ondrop="layerDrop(event, '${surf.id}')" ondragend="layerDragEnd(event)" onclick="selectSurface('${surf.id}')">
+                        <div class="flex items-center space-x-2 truncate min-w-0">
+                            <span title="Przeciągnij, aby zmienić kolejność" class="text-slate-400 cursor-grab"><i class="fa-solid fa-grip-vertical"></i></span>
+                            <span class="w-2 h-2 rounded-full ${isActive ? 'bg-emerald-400' : 'bg-brand-500'}"></span>
+                            <span class="font-medium truncate">${surf.label}</span>
+                        </div>
+                        <div class="flex items-center space-x-1 shrink-0">
+                            <button title="Przesuń wyżej (na wierzch)" aria-label="Przesuń warstwę wyżej" ${idx === 0 ? 'disabled' : ''} onclick="event.stopPropagation(); moveLayer('${surf.id}', 1)" class="p-1 text-slate-300 hover:text-white disabled:opacity-25"><i class="fa-solid fa-arrow-up"></i></button>
+                            <button title="Przesuń niżej (pod spód)" aria-label="Przesuń warstwę niżej" ${idx === state.surfaces.length - 1 ? 'disabled' : ''} onclick="event.stopPropagation(); moveLayer('${surf.id}', -1)" class="p-1 text-slate-300 hover:text-white disabled:opacity-25"><i class="fa-solid fa-arrow-down"></i></button>
+                            <button onclick="event.stopPropagation(); toggleSurfaceVisibility('${surf.id}')" class="p-1 hover:text-white text-slate-400">
+                                <i class="fa-solid ${surf.visible ? 'fa-eye text-slate-300' : 'fa-eye-slash text-slate-600'}"></i>
+                            </button>
+                            <button onclick="event.stopPropagation(); toggleSurfaceLock('${surf.id}')" class="p-1 hover:text-white text-slate-400">
+                                <i class="fa-solid ${surf.locked ? 'fa-lock text-amber-400' : 'fa-lock-open text-slate-600'}"></i>
+                            </button>
+                            <button onclick="event.stopPropagation(); deleteSurface('${surf.id}')" class="p-1 hover:text-rose-400 text-slate-500">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // The array is ordered back-to-front. The visible list is reversed (front-to-back).
+        let draggedLayerId = null;
+        function reorderLayer(id, targetId) {
+            if (id === targetId) return;
+            const from = state.surfaces.findIndex(s => s.id === id);
+            const to = state.surfaces.findIndex(s => s.id === targetId);
+            if (from < 0 || to < 0) return;
+            rememberChange();
+            const [layer] = state.surfaces.splice(from, 1);
+            state.surfaces.splice(to, 0, layer);
+            renderAllSurfacesDOM(); updateSurfacesListUI(); updateInspectorUI();
+        }
+        function moveLayer(id, delta) {
+            const i = state.surfaces.findIndex(s => s.id === id);
+            const j = i + delta;
+            if (i < 0 || j < 0 || j >= state.surfaces.length) return;
+            rememberChange();
+            [state.surfaces[i], state.surfaces[j]] = [state.surfaces[j], state.surfaces[i]];
+            renderAllSurfacesDOM(); updateSurfacesListUI(); updateInspectorUI();
+        }
+        function layerDragStart(event, id) {
+            if (event.target.closest('button')) { event.preventDefault(); return; }
+            draggedLayerId = id;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', id);
+        }
+        function layerDragOver(event) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+        }
+        function layerDrop(event, targetId) {
+            event.preventDefault(); event.stopPropagation();
+            const id = draggedLayerId || event.dataTransfer.getData('text/plain');
+            draggedLayerId = null;
+            if (id) reorderLayer(id, targetId);
+        }
+        function layerDragEnd(event) { draggedLayerId = null; }
+
+        function selectSurface(id) {
+            state.activeMaskId=null;
+            state.activeSurfaceId = id;
+            state.activeCornerIndex = null;
+            renderAllSurfacesDOM();
+            updateSurfacesListUI();
+            updateInspectorUI();
+        }
+
+        function toggleSurfaceVisibility(id) {
+            rememberChange();
+            const surf = state.surfaces.find(s => s.id === id);
+            if (surf) {
+                surf.visible = !surf.visible;
+                renderAllSurfacesDOM();
+                updateSurfacesListUI();
+            }
+        }
+
+        function toggleSurfaceLock(id) {
+            rememberChange();
+            const surf = state.surfaces.find(s => s.id === id);
+            if (surf) {
+                surf.locked = !surf.locked;
+                renderAllSurfacesDOM();
+                updateSurfacesListUI();
+            }
+        }
+
+        function updateInspectorUI() {
+            const activeSurf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+            const emptyEl = document.getElementById('inspector-empty');
+            const formEl = document.getElementById('inspector-form');
+            const activeName = document.getElementById('active-surface-name');
+
+            if (!activeSurf) {
+                emptyEl.classList.remove('hidden');
+                formEl.classList.add('hidden');
+                activeName.textContent = 'Brak wyboru';
+                return;
+            }
+
+            emptyEl.classList.add('hidden');
+            formEl.classList.remove('hidden');
+            activeName.textContent = activeSurf.label;
+
+            document.getElementById('prop-label').value = activeSurf.label;
+            document.getElementById('prop-video-source-type').value = activeSurf.sourceType;
+            
+            document.getElementById('prop-preserve-image-aspect').checked = !!activeSurf.preserveImageAspect;
+            document.getElementById('image-proportions-wrapper').classList.toggle('hidden', !['custom-file','custom-url'].includes(activeSurf.sourceType));
+            document.getElementById('source-file-wrapper').classList.toggle('hidden', activeSurf.sourceType !== 'custom-file');
+            document.getElementById('source-url-wrapper').classList.toggle('hidden', activeSurf.sourceType !== 'custom-url');
+            if (activeSurf.sourceType === 'custom-url') {
+                document.getElementById('prop-video-url').value = activeSurf.sourceUrl;
+            }
+
+            document.getElementById('prop-blend-mode').value = activeSurf.blendMode;
+            document.getElementById('prop-opacity').value = activeSurf.opacity;
+            document.getElementById('val-opacity').textContent = `${Math.round(activeSurf.opacity * 100)}%`;
+
+            document.getElementById('prop-brightness').value = activeSurf.brightness;
+            document.getElementById('val-brightness').textContent = `${Math.round(activeSurf.brightness * 100)}%`;
+
+            document.getElementById('prop-contrast').value = activeSurf.contrast;
+            document.getElementById('val-contrast').textContent = `${Math.round(activeSurf.contrast * 100)}%`;
+
+            document.getElementById('prop-hue').value = activeSurf.hue;
+            document.getElementById('val-hue').textContent = `${activeSurf.hue}°`;
+
+            // Populate Point Coordinates Inputs Dynamically
+            const coordsContainer = document.getElementById('corners-coords-container');
+            const pointLabels = activeSurf.isMesh 
+                ? activeSurf.corners.map((_,i)=>`P${i+1}`)
+                : ['NW (Góra-Lewo)', 'NE (Góra-Prawo)', 'SE (Dół-Prawo)', 'SW (Dół-Lewo)'];
+
+            coordsContainer.innerHTML = activeSurf.corners.map((pt, i) => `
+                <div class="bg-slate-800/80 p-1.5 rounded border border-slate-700">
+                    <span class="text-emerald-400 font-bold block mb-0.5">${pointLabels[i] || 'P'+i}</span>
+                    <div class="flex gap-1">
+                        <input type="number" id="pt-${i}-x" value="${Math.round(pt.x)}" onchange="updatePointCoord(${i}, 'x', this.value)" class="w-full bg-slate-900 border border-slate-700 px-1 py-0.5 rounded text-slate-200">
+                        <input type="number" id="pt-${i}-y" value="${Math.round(pt.y)}" onchange="updatePointCoord(${i}, 'y', this.value)" class="w-full bg-slate-900 border border-slate-700 px-1 py-0.5 rounded text-slate-200">
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updatePointCoord(index, axis, val) {
+            rememberChange();
+            const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+            if (surf && surf.corners[index]) {
+                surf.corners[index][axis] = parseFloat(val) || 0;
+                renderAllSurfacesDOM();
+            }
+        }
+
+        /**
+         * EVENT LISTENERS & INTERACTION SETUP
+         */
+        function zipCRC(bytes) {
+            let crc=0xffffffff;
+            for(const byte of bytes){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}
+            return (crc^0xffffffff)>>>0;
+        }
+        function makeProjectZip(entries) {
+            const parts=[],central=[];let offset=0,centralSize=0;
+            for(const entry of entries){
+                const name=new TextEncoder().encode(entry.name),data=entry.data,crc=zipCRC(data);
+                const local=new Uint8Array(30+name.length),v=new DataView(local.buffer);
+                v.setUint32(0,0x04034b50,true);v.setUint16(4,20,true);v.setUint16(6,0x800,true);v.setUint32(14,crc,true);v.setUint32(18,data.length,true);v.setUint32(22,data.length,true);v.setUint16(26,name.length,true);local.set(name,30);
+                const header=new Uint8Array(46+name.length),h=new DataView(header.buffer);
+                h.setUint32(0,0x02014b50,true);h.setUint16(4,20,true);h.setUint16(6,20,true);h.setUint16(8,0x800,true);h.setUint32(16,crc,true);h.setUint32(20,data.length,true);h.setUint32(24,data.length,true);h.setUint16(28,name.length,true);h.setUint32(42,offset,true);header.set(name,46);
+                parts.push(local,data);central.push(header);offset+=local.length+data.length;centralSize+=header.length;
+                if(offset>0xffffffff) throw Error('Projekt przekracza limit 4 GB paczki ZIP.');
+            }
+            const end=new Uint8Array(22),v=new DataView(end.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(8,entries.length,true);v.setUint16(10,entries.length,true);v.setUint32(12,centralSize,true);v.setUint32(16,offset,true);
+            return new Blob([...parts,...central,end],{type:'application/zip'});
+        }
+        async function readProjectZip(file) {
+            const bytes=new Uint8Array(await file.arrayBuffer()),view=new DataView(bytes.buffer),result=new Map();
+            let end=-1;for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--)if(view.getUint32(i,true)===0x06054b50){end=i;break;}
+            if(end<0)throw Error('Nieprawidłowa paczka ZIP.');
+            let pos=view.getUint32(end+16,true);const count=view.getUint16(end+10,true);
+            for(let i=0;i<count;i++){
+                if(view.getUint32(pos,true)!==0x02014b50)throw Error('Uszkodzony katalog ZIP.');
+                const flags=view.getUint16(pos+8,true),method=view.getUint16(pos+10,true),crc=view.getUint32(pos+16,true),size=view.getUint32(pos+20,true),fullSize=view.getUint32(pos+24,true),nl=view.getUint16(pos+28,true),el=view.getUint16(pos+30,true),cl=view.getUint16(pos+32,true),off=view.getUint32(pos+42,true);
+                const name=new TextDecoder().decode(bytes.slice(pos+46,pos+46+nl));pos+=46+nl+el+cl;
+                if(flags&1)throw Error('Zaszyfrowane pliki ZIP nie są obsługiwane.');
+                if(view.getUint32(off,true)!==0x04034b50)throw Error('Uszkodzony wpis ZIP.');
+                const start=off+30+view.getUint16(off+26,true)+view.getUint16(off+28,true);if(start+size>bytes.length)throw Error('Niekompletny plik ZIP.');
+                let data=bytes.slice(start,start+size);
+                if(method===8){if(typeof DecompressionStream==='undefined')throw Error('Ta przeglądarka nie obsługuje kompresji tego ZIP.');data=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());}
+                else if(method!==0)throw Error('Nieobsługiwana kompresja ZIP.');
+                if(data.length!==fullSize || zipCRC(data)!==crc)throw Error('Błąd integralności pliku w ZIP.');
+                result.set(name,data);
+            }
+            return result;
+        }
+        async function exportProjectPackage() {
+            const button=document.getElementById('btn-save-project');button.disabled=true;
+            try {
+                showToast('Przygotowuję paczkę projektu z plikami…','info');
+                const project=JSON.parse(JSON.stringify(state)),entries=[],assets=new Map();
+                async function pack(url,name,mime) {
+                    if(assets.has(url))return assets.get(url);
+                    const response=await fetch(url);if(!response.ok)throw Error(`Nie można pobrać pliku: ${name}`);
+                    const blob=await response.blob();
+                    const safe=String(name||'plik').replace(/[^a-zA-Z0-9._-]/g,'_');
+                    const path=`media/${entries.length+1}_${safe}`;
+                    entries.push({name:path,data:new Uint8Array(await blob.arrayBuffer())});
+                    const asset={path,mime:mime||blob.type};assets.set(url,asset);return asset;
+                }
+                for(const surf of project.surfaces){
+                    if(!['custom-file','custom-url'].includes(surf.sourceType)||!surf.sourceUrl)continue;
+                    const asset=await pack(surf.sourceUrl,surf.sourceFileName||`warstwa_${surf.id}`,surf.sourceMime);
+                    surf.sourceMediaKind=surfaceMediaKind(surf);surf.sourceAsset=asset;surf.sourceUrl=asset.path;
+                    surf.imageAspectFittedUrl=surf.imageAspectFittedUrl?asset.path:null;
+                }
+                if(/^(blob:|data:|https?:)/.test(project.facadeBg)){
+                    project.facadeAsset=await pack(project.facadeBg,'tlo_elewacji','');project.facadeBg=project.facadeAsset.path;
+                }
+                project.packageVersion=1;project.isDragging=false;project.dragType=null;
+                entries.unshift({name:'project.json',data:new TextEncoder().encode(JSON.stringify(project,null,2))});
+                const url=URL.createObjectURL(makeProjectZip(entries)),link=document.createElement('a');link.href=url;link.download=`projekcja3d_${Date.now()}.zip`;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+                showToast(`Zapisano projekt ZIP z ${entries.length-1} plikami.`,'success');
+            }catch(error){showToast(`Eksport nieudany: ${error.message}. Sprawdź dostęp do plików.`,'error');}
+            finally{button.disabled=false;}
+        }
+        async function importProjectPackage(file) {
+            const created=[];
+            try {
+                let project,entries;
+                const signature=new Uint8Array(await file.slice(0,4).arrayBuffer());
+                const isZip=signature.length===4 && signature[0]===0x50 && signature[1]===0x4b && signature[2]===0x03 && signature[3]===0x04;
+                if(isZip){
+                    entries=await readProjectZip(file);
+                    if(!entries.has('project.json'))throw Error('Brak project.json w paczce.');
+                    project=JSON.parse(new TextDecoder().decode(entries.get('project.json')));
+                }else project=JSON.parse(await file.text());
+                if(!Array.isArray(project.surfaces)||project.surfaces.some(s=>!Array.isArray(s.corners)))throw Error('Nieprawidłowy projekt.');
+                function unpack(asset){if(!entries?.has(asset.path))throw Error(`Brak pliku ${asset.path}`);const url=URL.createObjectURL(new Blob([entries.get(asset.path)],{type:asset.mime||'application/octet-stream'}));created.push(url);return url;}
+                for(const surf of project.surfaces)if(surf.sourceAsset){const fitted=!!surf.imageAspectFittedUrl;surf.sourceUrl=unpack(surf.sourceAsset);if(fitted)surf.imageAspectFittedUrl=surf.sourceUrl;delete surf.sourceAsset;}
+                if(project.facadeAsset){project.facadeBg=unpack(project.facadeAsset);}
+                rememberChange();state.surfaces=project.surfaces;state.masks=project.masks||[];state.activeSurfaceId=state.surfaces[0]?.id||null;state.activeMaskId=null;state.activeCornerIndex=null;state.activeMeshIndex=null;
+                state.facadeBg=project.facadeBg||'palace';state.facadeOpacity=project.facadeOpacity??0.7;
+                renderFacadeBackground();renderAllSurfacesDOM();updateSurfacesListUI();updateInspectorUI();
+                showToast('Wczytano projekt'+(entries?' wraz z plikami.':'. Starszy JSON nie zawiera wgranych plików.'),'success');
+            }catch(error){created.forEach(url=>URL.revokeObjectURL(url));showToast(`Import nieudany: ${error.message}`,'error');}
+        }
+
+        function setupEventListeners() {
+            document.getElementById('prop-preserve-image-aspect').addEventListener('change',e=>{
+                const surf=state.surfaces.find(s=>s.id===state.activeSurfaceId);
+                if(!surf) return;
+                rememberChange();surf.preserveImageAspect=e.target.checked;
+                if(surf.preserveImageAspect && surfaceMediaKind(surf)==='image') {
+                    surf.imageAspectFittedUrl=null;
+                    if(surf.imageWidth && surf.imageHeight) fitLayerToImage(surf,surf.imageWidth,surf.imageHeight);
+                }
+                renderAllSurfacesDOM();updateInspectorUI();
+            });
+            document.getElementById('btn-undo').addEventListener('click',undoLastChange);
+            // Capture pre-edit state before property controls mutate the project.
+            ['input','change'].forEach(type=>document.addEventListener(type,e=>{
+                if(e.target.id.startsWith('prop-') || e.target.id==='facade-opacity') rememberChange();
+            },true));
+            ['btn-reset-corners','btn-apply-url','btn-toggle-subdiv'].forEach(id=>document.getElementById(id).addEventListener('click',rememberChange,true));
+            const deleteDialog = document.getElementById('delete-layer-dialog');
+            document.getElementById('delete-layer-cancel').addEventListener('click', () => deleteDialog.close());
+            document.getElementById('delete-layer-confirm').addEventListener('click', confirmDeleteSurface);
+            deleteDialog.addEventListener('close', () => { pendingDeleteSurfaceId = null; pendingDeleteMaskId=null; });
+            document.getElementById('btn-add-surface').addEventListener('click', () => createSurface());
+
+            document.getElementById('btn-subdivide-mesh').addEventListener('click', () => {
+                if(!state.activeSurfaceId) createSurface();
+                const surf=state.surfaces.find(s=>s.id===state.activeSurfaceId);
+                if(!surf || surf.locked) return;
+                const rows=document.getElementById('mesh-rows').value;
+                const cols=document.getElementById('mesh-cols').value;
+                resizeMesh(surf,rows,cols);
+                renderAllSurfacesDOM(); updateInspectorUI();
+                showToast(`Siatka ${surf.meshCols} × ${surf.meshRows}: ${surf.corners.length} punktów`, 'success');
+            });
+            document.getElementById('btn-toggle-subdiv').addEventListener('click', () => {
+                const surf=state.surfaces.find(s=>s.id===state.activeSurfaceId);
+                if(!surf || surf.locked) return;
+                if(surf.isMesh) {
+                    const {rows,cols}=meshSize(surf), p=surf.corners;
+                    surf.corners=[p[0],p[cols-1],p[rows*cols-1],p[(rows-1)*cols]];
+                    surf.isMesh=false; state.activeCornerIndex=0; state.activeMeshIndex=null;
+                } else resizeMesh(surf,document.getElementById('mesh-rows').value,document.getElementById('mesh-cols').value);
+                renderAllSurfacesDOM(); updateInspectorUI();
+            });
+
+            document.getElementById('btn-add-mask').addEventListener('click', () => {
+                rememberChange();
+                const maskId = 'mask_' + Date.now();
+                state.masks.push({
+                    id: maskId,
+                    label: `Maska Wycięcia ${state.masks.length + 1}`,
+                    visible: true,
+                    fillColor: '#000000',
+                    opacity: 1,
+                    points: [
+                        { x: 300, y: 270 },
+                        { x: 380, y: 270 },
+                        { x: 380, y: 400 },
+                        { x: 300, y: 400 }
+                    ]
+                });
+                state.activeMaskId=maskId; state.activeSurfaceId=null;
+                updateInspectorUI(); updateSurfacesListUI();
+                renderAllSurfacesDOM();
+                showToast('Dodano nową maskę zasłaniającą', 'info');
+            });
+
+            document.getElementById('btn-toggle-grid').addEventListener('click', () => {
+                state.showGrid = !state.showGrid;
+                document.getElementById('calibration-grid-svg').classList.toggle('hidden', !state.showGrid);
+                document.getElementById('grid-btn-text').textContent = state.showGrid ? 'Ukryj Siatkę' : 'Siatka Kalibracyjna';
+            });
+
+            document.getElementById('btn-play-pause-all').addEventListener('click', () => {
+                state.isPlayingAll = !state.isPlayingAll;
+                const icon = document.getElementById('play-all-icon');
+                const text = document.getElementById('play-all-text');
+                const videos = [...new Set([...document.querySelectorAll('video'),...videoSources.values()])];
+
+                if (state.isPlayingAll) {
+                    icon.className = 'fa-solid fa-pause text-cyan-400';
+                    text.textContent = 'Pauza Wszystko';
+                    videos.forEach(v => { v.autoplay = true; v.play().catch(() => {}); });
+                } else {
+                    icon.className = 'fa-solid fa-play text-emerald-400';
+                    text.textContent = 'Odtwarzaj';
+                    videos.forEach(v => { v.autoplay = false; v.pause(); });
+                }
+            });
+
+            let fullscreenPending=false;
+            function setProjectionMode(enabled) {
+                document.body.classList.toggle('mode-fullscreen',enabled);
+                document.getElementById('btn-fullscreen').setAttribute('aria-pressed',String(enabled));
+                requestAnimationFrame(fitProjectionStage);
+            }
+            const toggleFullscreen = async () => {
+                if(fullscreenPending) return;
+                fullscreenPending=true;
+                try {
+                    if(document.body.classList.contains('mode-fullscreen')) {
+                        if(document.fullscreenElement) await document.exitFullscreen();
+                        setProjectionMode(false);
+                    } else {
+                        if(!document.fullscreenElement) {
+                            if(!document.documentElement.requestFullscreen) throw Error('Pełny ekran nie jest obsługiwany w tej przeglądarce.');
+                            await document.documentElement.requestFullscreen();
+                        }
+                        setProjectionMode(true);
+                    }
+                } catch(error) {
+                    setProjectionMode(false);
+                    showToast('Nie udało się włączyć pełnego ekranu. Otwórz plik bezpośrednio w przeglądarce i spróbuj ponownie.','error');
+                } finally {fullscreenPending=false;}
+            };
+            document.getElementById('btn-fullscreen').addEventListener('click',toggleFullscreen);
+            document.addEventListener('fullscreenchange',()=>{
+                if(!document.fullscreenElement) setProjectionMode(false);
+                else requestAnimationFrame(fitProjectionStage);
+            });
+            window.addEventListener('keydown',e=>{
+                if(e.key==='Escape' && document.body.classList.contains('mode-fullscreen') && !fullscreenPending) {
+                    if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+                    setProjectionMode(false);
+                }
+            });
+
+            // Keyboard Shortcuts & Nudging
+            window.addEventListener('keydown', (e) => {
+                if (document.getElementById('delete-layer-dialog').open) return;
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='z' && !e.shiftKey) {
+                    if(e.target.closest('input,textarea,[contenteditable="true"]')) return;
+                    e.preventDefault();undoLastChange();return;
+                }
+                if (e.key === 'f' || e.key === 'F') {
+                    if (e.target.tagName !== 'INPUT') toggleFullscreen();
+                }
+
+                if (e.key === 'Delete' || e.key === 'Backspace') {
+                    if (e.target.tagName !== 'INPUT' && state.activeSurfaceId) {
+                        deleteSurface(state.activeSurfaceId);
+                    }
+                }
+
+                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && state.activeSurfaceId) {
+                    if (e.target.tagName === 'INPUT') return;
+                    const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                    if (!surf || surf.locked) return;
+
+                    const activePtIdx = surf.isMesh ? state.activeMeshIndex : state.activeCornerIndex;
+                    if (activePtIdx === null || activePtIdx === undefined) return;
+
+                    e.preventDefault();
+                    rememberChange();
+                    const step = e.shiftKey ? 10 : 1;
+                    const pt = surf.corners[activePtIdx];
+
+                    if (e.key === 'ArrowUp') pt.y -= step;
+                    if (e.key === 'ArrowDown') pt.y += step;
+                    if (e.key === 'ArrowLeft') pt.x -= step;
+                    if (e.key === 'ArrowRight') pt.x += step;
+
+                    renderAllSurfacesDOM();
+                    updateInspectorUI();
+                }
+            });
+
+            document.getElementById('prop-label').addEventListener('input', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) {
+                    surf.label = e.target.value;
+                    updateSurfacesListUI();
+                }
+            });
+
+            document.getElementById('prop-video-source-type').addEventListener('change', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) {
+                    surf.sourceType = e.target.value;
+                    renderAllSurfacesDOM();
+                    updateInspectorUI();
+                }
+            });
+
+            document.getElementById('prop-video-file').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const kind=detectMediaKind(file.name,file.type);
+                if(!kind) {showToast('Wybierz grafikę PNG, JPG, WebP, GIF, SVG, BMP, AVIF lub film MP4/WebM/Ogg.','error');e.target.value='';return;}
+                const surf=state.surfaces.find(s=>s.id===state.activeSurfaceId);
+                if(!surf) return;
+                surf.sourceUrl=URL.createObjectURL(file);
+                surf.imageAspectFittedUrl=null;surf.imageWidth=null;surf.imageHeight=null;
+                surf.sourceType='custom-file'; surf.sourceMediaKind=kind;
+                surf.preserveImageAspect=document.getElementById('prop-preserve-image-aspect').checked;
+                surf.sourceMime=file.type; surf.sourceFileName=file.name;
+                renderAllSurfacesDOM();updateInspectorUI();
+                showToast(`Załadowano ${kind==='image'?'grafikę':'film'}: ${file.name}`,'success');
+                e.target.value='';
+            });
+
+            document.getElementById('btn-apply-url').addEventListener('click', () => {
+                const url = document.getElementById('prop-video-url').value;
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf && url) {
+                    surf.sourceUrl = url;
+                    surf.imageAspectFittedUrl=null;surf.imageWidth=null;surf.imageHeight=null;
+                    surf.sourceMediaKind=detectMediaKind(url);surf.sourceMime='';surf.sourceFileName='';
+                    renderAllSurfacesDOM();
+                    showToast('Zastosowano nowy adres URL', 'success');
+                }
+            });
+
+            document.getElementById('prop-blend-mode').addEventListener('change', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) { surf.blendMode = e.target.value; renderAllSurfacesDOM(); }
+            });
+            document.getElementById('prop-opacity').addEventListener('input', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) { surf.opacity = parseFloat(e.target.value); renderAllSurfacesDOM(); updateInspectorUI(); }
+            });
+            document.getElementById('prop-brightness').addEventListener('input', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) { surf.brightness = parseFloat(e.target.value); renderAllSurfacesDOM(); updateInspectorUI(); }
+            });
+            document.getElementById('prop-contrast').addEventListener('input', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) { surf.contrast = parseFloat(e.target.value); renderAllSurfacesDOM(); updateInspectorUI(); }
+            });
+            document.getElementById('prop-hue').addEventListener('input', (e) => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) { surf.hue = parseInt(e.target.value); renderAllSurfacesDOM(); updateInspectorUI(); }
+            });
+
+            document.getElementById('btn-reset-corners').addEventListener('click', () => {
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf) {
+                    if (surf.isMesh) {
+                        const defaultW = 400, defaultH = 250, offsetX = 200, offsetY = 150;
+                        surf.corners = [];
+                        for (let r = 0; r < 3; r++) {
+                            for (let c = 0; c < 3; c++) {
+                                surf.corners.push({ x: offsetX + c * (defaultW / 2), y: offsetY + r * (defaultH / 2) });
+                            }
+                        }
+                    } else {
+                        surf.corners = [
+                            { x: 200, y: 150 },
+                            { x: 600, y: 150 },
+                            { x: 600, y: 400 },
+                            { x: 200, y: 400 }
+                        ];
+                    }
+                    renderAllSurfacesDOM();
+                    updateInspectorUI();
+                }
+            });
+
+            document.getElementById('btn-duplicate-surface').addEventListener('click', () => {
+                if (state.activeSurfaceId) duplicateSurface(state.activeSurfaceId);
+            });
+
+            document.getElementById('btn-delete-surface').addEventListener('click', () => {
+                if (state.activeSurfaceId) deleteSurface(state.activeSurfaceId);
+            });
+
+            document.getElementById('tab-surfaces-btn').addEventListener('click', () => {
+                document.getElementById('tab-surfaces').classList.remove('hidden');
+                document.getElementById('tab-facade').classList.add('hidden');
+                document.getElementById('tab-surfaces-btn').className = 'flex-1 py-2.5 text-xs font-medium border-b-2 border-brand-500 text-brand-400 flex items-center justify-center space-x-2';
+                document.getElementById('tab-facade-btn').className = 'flex-1 py-2.5 text-xs font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center justify-center space-x-2';
+            });
+
+            document.getElementById('tab-facade-btn').addEventListener('click', () => {
+                document.getElementById('tab-facade').classList.remove('hidden');
+                document.getElementById('tab-surfaces').classList.add('hidden');
+                document.getElementById('tab-facade-btn').className = 'flex-1 py-2.5 text-xs font-medium border-b-2 border-brand-500 text-brand-400 flex items-center justify-center space-x-2';
+                document.getElementById('tab-surfaces-btn').className = 'flex-1 py-2.5 text-xs font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center justify-center space-x-2';
+            });
+
+            document.querySelectorAll('.facade-preset-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    state.facadeBg = btn.dataset.preset;
+                    renderFacadeBackground();
+                });
+            });
+
+            document.getElementById('input-facade-upload').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const url = URL.createObjectURL(file);
+                    state.facadeBg = url;
+                    renderFacadeBackground();
+                    showToast('Wgrano własne tło elewacji', 'success');
+                }
+            });
+
+            document.getElementById('facade-opacity').addEventListener('input', (e) => {
+                state.facadeOpacity = parseFloat(e.target.value);
+                renderFacadeBackground();
+            });
+
+            // Pointer Drag handling on stage viewport (Supports both Quad corners and 3x3 Mesh points)
+            const viewport = document.getElementById('viewport-container');
+
+            viewport.addEventListener('pointerdown', (e) => {
+                if (dragPointerId !== null || (e.pointerType === 'mouse' && e.button !== 0) || document.body.classList.contains('mode-fullscreen')) return;
+                const maskHit=e.target.closest('[data-drag-mask]');
+                if(maskHit) {
+                    const mask=state.masks.find(m=>m.id===maskHit.dataset.dragMask);
+                    if(!mask || !mask.visible) return;
+                    e.preventDefault();
+                    const start=pointerToScene(e);
+                    rememberChange();
+                    maskDrag={id:mask.id,index:maskHit.dataset.maskPoint===undefined?null:Number(maskHit.dataset.maskPoint),start,points:mask.points.map(p=>({...p}))};
+                    dragPointerId=e.pointerId; state.isDragging=true; state.dragType='mask';
+                    state.activeMaskId=mask.id; state.activeSurfaceId=null;
+                    viewport.setPointerCapture(e.pointerId);
+                    renderAllSurfacesDOM(); updateSurfacesListUI(); updateInspectorUI(); return;
+                }
+                const hit=e.target.closest('[data-drag-surface]');
+                if(!hit) return;
+                const surf=state.surfaces.find(s=>s.id===hit.dataset.dragSurface);
+                if(!surf || surf.locked || !surf.visible) return;
+                e.preventDefault();
+                rememberChange();
+                surfaceDragStart=pointerToScene(e);
+                surfaceDragCorners=surf.corners.map(p=>({...p}));
+                dragOffset={x:0,y:0}; dragPointerId=e.pointerId;
+                state.activeMaskId=null;
+                state.isDragging=true; state.dragType='surface'; state.activeSurfaceId=surf.id;
+                viewport.setPointerCapture(e.pointerId);
+                renderAllSurfacesDOM(); updateSurfacesListUI(); updateInspectorUI();
+            });
+
+            window.addEventListener('pointermove', (e) => {
+                if (!state.isDragging || e.pointerId !== dragPointerId) return;
+                e.preventDefault();
+
+                const position=pointerToScene(e);
+                const mouseX = position.x + dragOffset.x;
+                const mouseY = position.y + dragOffset.y;
+
+                if(state.dragType==='mask' && maskDrag) {
+                    const mask=state.masks.find(m=>m.id===maskDrag.id);
+                    if(!mask) return;
+                    const {x,y}=position;
+                    const dx=x-maskDrag.start.x, dy=y-maskDrag.start.y;
+                    mask.points=maskDrag.points.map((p,i)=>maskDrag.index===null || i===maskDrag.index ? {x:p.x+dx,y:p.y+dy} : {...p});
+                    requestGeometryUpdate(); return;
+                }
+                const surf = state.surfaces.find(s => s.id === state.activeSurfaceId);
+                if (surf && !surf.locked) {
+                    if(state.dragType === 'surface' && surfaceDragStart && surfaceDragCorners) {
+                        const dx=mouseX-surfaceDragStart.x, dy=mouseY-surfaceDragStart.y;
+                        surf.corners=surfaceDragCorners.map(p=>({x:p.x+dx,y:p.y+dy}));
+                        requestGeometryUpdate();
+                        return;
+                    }
+                    const ptIdx = surf.isMesh ? state.activeMeshIndex : state.activeCornerIndex;
+                    if (ptIdx !== null && ptIdx !== undefined && surf.corners[ptIdx]) {
+                        if(e.shiftKey) {
+                            if(!proportionalDrag) proportionalDrag=makeProportionalDrag(surf,ptIdx);
+                            if(proportionalDrag) {
+                                surf.corners=scalePointsFromCorner(proportionalDrag,mouseX,mouseY);
+                                requestGeometryUpdate();return;
+                            }
+                        } else proportionalDrag=null;
+                        surf.corners[ptIdx] = {
+                            x: Math.max(-200, Math.min(SCENE_WIDTH + 200, mouseX)),
+                            y: Math.max(-200, Math.min(SCENE_HEIGHT + 200, mouseY))
+                        };
+                        requestGeometryUpdate();
+                    }
+                }
+            });
+
+            function finishPointDrag(e) {
+                if (e.pointerId !== dragPointerId) return;
+                const pointerId = dragPointerId;
+                dragPointerId = null;
+                surfaceDragStart = null; surfaceDragCorners = null; maskDrag=null; proportionalDrag=null;
+                state.isDragging = false;
+                state.dragType = null;
+                requestGeometryUpdate(); updateInspectorUI();
+                if (viewport.hasPointerCapture(pointerId)) viewport.releasePointerCapture(pointerId);
+            }
+            window.addEventListener('pointerup', finishPointDrag);
+            window.addEventListener('pointercancel', finishPointDrag);
+            viewport.addEventListener('lostpointercapture', finishPointDrag);
+
+            document.getElementById('btn-save-project').addEventListener('click', exportProjectPackage);
+            document.getElementById('input-load-file').addEventListener('change',async e=>{
+                const file=e.target.files[0];if(file)await importProjectPackage(file);e.target.value='';
+            });
+        }
+
+        /**
+         * TOAST NOTIFICATIONS
+         */
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const icons = {
+                success: '<i class="fa-solid fa-circle-check text-emerald-400"></i>',
+                error: '<i class="fa-solid fa-circle-xmark text-rose-400"></i>',
+                info: '<i class="fa-solid fa-circle-info text-cyan-400"></i>'
+            };
+
+            toast.className = 'bg-slate-900/95 border border-slate-700 text-slate-100 px-3.5 py-2 rounded-lg shadow-xl text-xs flex items-center space-x-2.5 backdrop-blur transition-all duration-300 transform translate-x-10 opacity-0';
+            toast.innerHTML = `${icons[type] || icons.info}<span>${message}</span>`;
+
+            container.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-x-10', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-x-10');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        /**
+         * APPLICATION INITIALIZATION
+         */
+        window.addEventListener('DOMContentLoaded', () => {
+            setupCanvasGenerators();
+            renderFacadeBackground();
+            setupEventListeners();
+
+            // Create initial default video mapping surfaces for palace facade demo
+            createSurface('Oknie Lewe (Łuk)', [
+                { x: 300, y: 270 },
+                { x: 380, y: 270 },
+                { x: 380, y: 400 },
+                { x: 300, y: 400 }
+            ]);
+
+            createSurface('Główna Centralna Elewacja', [
+                { x: 520, y: 270 },
+                { x: 760, y: 270 },
+                { x: 760, y: 400 },
+                { x: 520, y: 400 }
+            ]);
+
+            // Assign matrix animation generator to surface 2
+            if (state.surfaces[1]) {
+                state.surfaces[1].sourceType = 'gen-matrix';
+            }
+
+            renderAllSurfacesDOM();
+            updateInspectorUI();
+
+            setupFloatingPanels();
+            historyReady=true;
+            showToast('Studio Projekcji3D gotowe do użycia', 'success');
+        });
+    </script>
+    <script>
+      (() => {
+        const dialog = document.getElementById('license-dialog');
+        document.getElementById('btn-license-info').addEventListener('click', () => dialog.showModal());
+        document.getElementById('license-close').addEventListener('click', () => dialog.close());
+        dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+      })();
+    </script>
+</body>
+</html>
